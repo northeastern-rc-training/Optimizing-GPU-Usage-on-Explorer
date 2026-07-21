@@ -40,18 +40,12 @@ echo "========================================"
 # ── Verify GPU allocation (always) ───────────────────────────────────────────
 python scripts/01_gpu_verify.py
 
-# ── Copy dataset to node-local storage if available ──────────────────────────
-# $TMPDIR (node-local NVMe) is much faster than Lustre for small-file reads.
-# Fall back to /scratch if $TMPDIR is not set on this node.
-if [ -n "$TMPDIR" ] && [ -d "$TMPDIR" ]; then
-    echo "Copying dataset to node-local storage ($TMPDIR) ..."
-    rsync -a /scratch/$USER/mydata/ $TMPDIR/mydata/   # ← CHANGE: your data path
-    DATA_DIR=$TMPDIR/mydata
-    echo "Done. Using DATA_DIR=$DATA_DIR"
-else
-    DATA_DIR=/scratch/$USER/mydata                    # ← CHANGE: your data path
-    echo "TMPDIR not available, using DATA_DIR=$DATA_DIR"
-fi
+# ── Dataset location ─────────────────────────────────────────────────────────
+# All filesystems here (/home, /scratch, /projects) are network filesystems (NFS).
+# Keep your data as a few large files rather than millions of small ones, and let
+# the DataLoader (num_workers / pin_memory / prefetch_factor) hide read latency.
+DATA_DIR=/scratch/$USER/mydata                        # ← CHANGE: your data path
+echo "Using DATA_DIR=$DATA_DIR"
 
 # ── Training ──────────────────────────────────────────────────────────────────
 python train.py \                                     # ← CHANGE: your script

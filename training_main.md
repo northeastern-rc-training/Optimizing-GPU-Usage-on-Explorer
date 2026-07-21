@@ -294,7 +294,7 @@ You run a ResNet training job and `nvidia-smi` shows GPU utilization at 18%. Tha
 2. **Framework layer** (PyTorch Profiler): you run 20 steps and read the table. `DataLoader.__next__` is at the top with 1.8 seconds of CPU time and 0 CUDA time. Confirmed: the loader is the bottleneck.
 3. **Timeline layer** (`nsys`): you open the `.nsys-rep` file and see the GPU kernel rows are nearly empty — long stretches of white between short orange bursts of compute. The CPU rows show file read system calls consuming the gaps. This tells you the bottleneck is I/O on the dataset, not CPU processing or the model itself.
 
-You never needed to go to the kernel level. The fix — moving the dataset to `$TMPDIR` and setting `num_workers=8` — is visible at layer 2. The nsys timeline just confirms it.
+You never needed to go to the kernel level. The fix — setting `num_workers=8` so data loading overlaps with compute — is visible at layer 2. The nsys timeline just confirms it.
 
 ### 3.2 Interactive Sessions: Profile Here, Not in Batch
 
@@ -419,13 +419,13 @@ When you open the `.nsys-rep` file in the Nsight Systems GUI, you see horizontal
 
 | Pattern you see on the timeline | What it means | Fix |
 |---|---|---|
-| GPU row is mostly white with short orange bursts | GPU is idle between batches — data not arriving fast enough | Increase `num_workers`, move data to `$TMPDIR` |
-| CPU rows show `read()` system calls filling the gaps between GPU kernels | I/O bottleneck — data is being read from a slow filesystem during training | Copy dataset to `$TMPDIR` before training starts |
+| GPU row is mostly white with short orange bursts | GPU is idle between batches — data not arriving fast enough | Increase `num_workers` and `prefetch_factor` |
+| CPU rows show `read()` system calls filling the gaps between GPU kernels | I/O bottleneck — data is being read from the network filesystem during training | Increase `num_workers`/`prefetch_factor` so reads overlap compute; store data as a few large files, not millions of tiny ones |
 | `cudaMemcpy HtoD` calls appear scattered throughout the step, not at the beginning | Tensors are being moved to GPU inside the training loop, not in the DataLoader | Add `pin_memory=True`, do `.to(device)` in the DataLoader worker |
 | GPU row is dense (orange), but a periodic gap appears every N steps | Gradient synchronization stall in multi-GPU training | Tune `--nproc_per_node`, overlap communication with `find_unused_parameters=False` |
 | Two GPU streams alternate — one idle while the other runs | Forward and backward passes not overlapping | This is normal for single-GPU DDP; only a concern in pipeline parallelism |
 
-**Concrete example:** You run `nsys profile` on a training job and open the report. The GPU kernel row (CUDA HW row) shows orange activity for about 15ms, then a 50ms white gap, then 15ms of orange again. That 50ms gap is the GPU waiting for the next batch. You hover over the CPU thread row and see `pthread` calls to `read()` filling that gap — confirming the data is being read from Lustre during training. Fix: `rsync` the dataset to `$TMPDIR` at job start. After the fix, the white gaps shrink to under 5ms.
+**Concrete example:** You run `nsys profile` on a training job and open the report. The GPU kernel row (CUDA HW row) shows orange activity for about 15ms, then a 50ms white gap, then 15ms of orange again. That 50ms gap is the GPU waiting for the next batch. You hover over the CPU thread row and see `pthread` calls to `read()` filling that gap — confirming the data is being read from the network filesystem during training. Fix: raise `num_workers` and `prefetch_factor` so batches are loaded ahead of time and overlap with compute. After the fix, the white gaps shrink to under 5ms.
 
 > **Section 3 takeaway:** Start with nvidia-smi. If utilization is low, run the PyTorch Profiler for 20 steps. Read the CUDA time column. The biggest entry there is where you should look first.
 
@@ -477,29 +477,7 @@ print(f'Mean compute time:    {compute_ms:.1f} ms')
 
 > If `compute_ms` is 25 ms and `loader_ms` is 60 ms, your GPU is idle for 35 of every 60 ms — that is 58% wasted GPU time. No amount of model optimization recovers that. Fix the loader first.
 
-### 4.2 HPC Storage: Where Your Data Lives Matters
-
-On a personal workstation, your data usually lives on a local NVMe SSD at 5–7 GB/s. On an HPC cluster, data typically lives on a shared parallel filesystem accessed over a network — which is fine for large sequential reads but slow for millions of small files.
-
-| Storage tier | Typical bandwidth | Advice |
-|---|---|---|
-| Home directory (`/home`) | 50–200 MB/s | **Never train from here.** Slow, and you impact other users. |
-| Lustre scratch (`/scratch`) | 1–10 GB/s aggregate | Good for large files. Avoid millions of tiny files. |
-| Node-local NVMe (`$TMPDIR`) | 3–7 GB/s | **Best option.** Copy your dataset here at job start. |
-| RAM disk (`tmpfs`) | 25+ GB/s | Ideal for small datasets that fit in memory. |
-
-```bash
-# In your SLURM script: copy dataset to local storage BEFORE training
-echo "Copying dataset to local scratch..."
-rsync -a --progress /scratch/$USER/mydata/ $TMPDIR/mydata/
-echo "Copy complete, starting training"
-
-python train.py --data-dir $TMPDIR/mydata/
-```
-
-> **For MD simulation users:** If you run GROMACS or NAMD and your input files are on `/home` or `/scratch`, consider copying them to `$TMPDIR` at job start. The I/O overhead on trajectory outputs is the same problem.
-
-### 4.3 DataLoader Parameters — The Four Knobs
+### 4.2 DataLoader Parameters — The Four Knobs
 
 A **DataLoader** (PyTorch's `torch.utils.data.DataLoader`) is the component that feeds your model. It takes a `Dataset` and handles the plumbing between disk and GPU: reading samples, collating them into batches, shuffling, and — crucially — doing this work on **CPU worker processes in parallel** so the next batch is ready before the GPU finishes the current one.
 
@@ -533,7 +511,7 @@ What each parameter does:
 python scripts/03_dataloader_benchmark.py
 ```
 
-### 4.4 Batching: Never Process One Sample at a Time
+### 4.3 Batching: Never Process One Sample at a Time
 
 This is the complementary problem to data starvation: if your code sends individual samples to the GPU in a loop, you are wasting the hardware even when the data is available.
 
@@ -548,13 +526,13 @@ Every GPU call has a fixed overhead: kernel launch cost, PCIe transfer setup, sy
 
 | Configuration | GPU Utilization | Images/sec (ResNet-50, A100) |
 |---|---|---|
-| `num_workers=0`, no `pin_memory`, data on Lustre | ~18% | ~420 |
-| `num_workers=8`, `pin_memory=True`, data on Lustre | ~55% | ~1,300 |
-| `num_workers=8`, `pin_memory=True`, data on `$TMPDIR` | ~82% | ~1,950 |
+| `num_workers=0`, no `pin_memory` | ~18% | ~420 |
+| `num_workers=8`, `pin_memory=True` | ~55% | ~1,300 |
+| `num_workers=8`, `pin_memory=True`, `prefetch_factor=4` | ~82% | ~1,950 |
 
-> **For GROMACS / pre-built software users:** Your software already handles batching internally, but the storage tier still matters. If your job is I/O bound (reading topology files, writing trajectories), moving those files to `$TMPDIR` often yields a meaningful speedup.
+> **For GROMACS / pre-built software users:** Your software already handles batching internally. If your job is I/O bound (reading topology files, writing trajectories), store your data as a few large files rather than millions of small ones — the network filesystem handles large sequential reads far better than many tiny ones.
 
-> **Section 4 takeaway:** GPU utilization below 70% almost always points to the data pipeline, not the model. Fix storage locality first. Then DataLoader parameters. These require zero modifications to your model code.
+> **Section 4 takeaway:** GPU utilization below 70% almost always points to the data pipeline, not the model. Fix the DataLoader parameters first — `num_workers`, `pin_memory`, `prefetch_factor`, `persistent_workers`. These require zero modifications to your model code.
 
 ---
 
@@ -831,7 +809,7 @@ Fix one thing at a time, and measure before and after each change. Fixing two th
 GPU utilization < 50% ?
   ├─ Yes → Check data pipeline first (Section 4)
   │         Are you using num_workers=0? Fix that first.
-  │         Is data on /home or /scratch? Copy to $TMPDIR.
+  │         Then raise pin_memory / prefetch_factor / persistent_workers.
   │
   └─ No (util 50–80%) → Check memory usage
         ├─ Memory < 50% → Increase batch size (Section 5.2)
@@ -879,7 +857,7 @@ Before submitting any GPU batch job, verify these items — ideally in an `srun`
 - [ ] `nvidia-smi` during a short run shows utilization > 70%
 - [ ] `num_workers` in DataLoader is set (not 0) and equals `cpus-per-task - 1`
 - [ ] `pin_memory=True` is set in DataLoader
-- [ ] Data is on `$TMPDIR` or node-local storage (not `/home`)
+- [ ] `prefetch_factor` / `persistent_workers` set so loading overlaps compute
 - [ ] Batch size uses at least 50% of VRAM (not leaving large amounts unused)
 - [ ] Mixed precision enabled if on A100/H100 (just three lines of code)
 - [ ] SLURM script requests the right GPU type (`gpu:v100-sxm2:1`, not just `gpu:1`)
@@ -923,7 +901,7 @@ Every section of this training applies directly. The scripts in `scripts/` demon
   training_args = TrainingArguments(
       bf16=True,                        # Section 5.3
       gradient_checkpointing=True,      # Section 5.4
-      dataloader_num_workers=8,         # Section 4.3
+      dataloader_num_workers=8,         # Section 4.2
       ...
   )
   ```
@@ -931,7 +909,7 @@ Every section of this training applies directly. The scripts in `scripts/` demon
 ### Molecular Dynamics (GROMACS, NAMD, AMBER)
 
 - Section 1 applies: verify the right GPU is allocated.
-- Section 4 applies: if your input files or trajectory outputs are on `/home` or a slow filesystem, copy them to `$TMPDIR` at job start. MD codes are often I/O bound on trajectory writes.
+- Section 4 applies: MD codes are often I/O bound on trajectory writes. Write fewer, larger output files and reduce write frequency where you can — the network filesystem handles large sequential I/O far better than frequent small writes.
 - Section 6 applies: multi-GPU MD scales well within a node using NVLink but degrades quickly across nodes over InfiniBand for small systems. Measure scaling efficiency.
 - `nvidia-smi` and `nvitop` are your primary monitoring tools — the profilers in Section 3 are not applicable to GPU-accelerated MD in the same way.
 
@@ -977,7 +955,7 @@ Review our [Documentation](https://rc-docs.northeastern.edu/en/latest/index.html
 | GPU runtime | Bundled with the PyTorch CUDA wheels — no CUDA module needed |
 | Python | system `python3` on PATH (no python module) |
 | Environment | `venv` (`gpu_training_env`) |
-| Fast local storage | `$TMPDIR` (node-local NVMe); `/scratch` (Lustre) |
+| Storage | `/home`, `/scratch`, `/projects` (all network filesystems / NFS) |
 | Post-job efficiency | `gpu-logs <jobid>` |
 | Preferred precision | BF16 on A100/H100; FP16 on V100/T4 |
 

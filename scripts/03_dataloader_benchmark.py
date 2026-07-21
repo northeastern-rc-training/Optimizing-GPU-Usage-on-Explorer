@@ -10,12 +10,10 @@ This script benchmarks four DataLoader configurations and shows how much of
 the GPU's time would be spent waiting under each one.
 
 Explorer storage note:
-  • /home/$USER    — never train from here (50–200 MB/s, shared)
-  • /scratch/$USER — Lustre; good for large sequential reads; avoid datasets
-                     made of millions of tiny files
-  • $TMPDIR        — node-local NVMe; fastest option; copy data here at job
-                     start (see snippet below)
-  • tmpfs (RAM)    — for small datasets that fit entirely in memory
+  All filesystems (/home, /scratch, /projects) are network filesystems (NFS).
+  Keep your dataset under /scratch/$USER, pack it into a few large files
+  (HDF5 / WebDataset) rather than millions of tiny ones, and rely on the
+  DataLoader (num_workers / pin_memory / prefetch_factor) to hide read latency.
 
 Usage:
     python 03_dataloader_benchmark.py
@@ -127,30 +125,21 @@ print()
 print(SEP)
 print("  EXPLORER STORAGE QUICK GUIDE")
 print(SEP)
-print("  /home/$USER          (~50–200 MB/s)")
-print("    NEVER train from here.  Slow and shared — impacts other users")
-print("    and your own jobs.")
+print("  All filesystems here — /home, /scratch, /projects — are network")
+print("  filesystems (NFS).  There is no faster local tier to copy into, so")
+print("  how you structure the data and the DataLoader is what matters.")
 print()
-print("  /scratch/$USER       (Lustre, ~1–10 GB/s aggregate)")
-print("    Good for large sequential reads.  Avoid datasets made of millions")
-print("    of tiny files (metadata overhead dominates) — pack them into HDF5")
-print("    or WebDataset first.")
+print("  /scratch/$USER")
+print("    Keep your dataset here.  Pack it into a few large files (HDF5 or")
+print("    WebDataset) rather than millions of tiny ones — per-file metadata")
+print("    overhead over NFS is what kills small-file read throughput.")
 print()
-print("  $TMPDIR              (node-local NVMe, ~3–7 GB/s)")
-print("    Fastest option.  Copy your dataset here at job start:")
+print("  /home/$USER")
+print("    Small and shared.  Fine for code and configs, not for datasets.")
 print()
-print("      # In your SLURM script, before `python train.py`:")
-print("      if [ -n \"$TMPDIR\" ] && [ -d \"$TMPDIR\" ]; then")
-print("          echo 'Copying dataset to node-local storage ...'")
-print("          rsync -a /scratch/$USER/mydata/ $TMPDIR/mydata/")
-print("          DATA_DIR=$TMPDIR/mydata")
-print("      else")
-print("          DATA_DIR=/scratch/$USER/mydata")
-print("      fi")
-print("      python train.py --data-dir $DATA_DIR")
-print()
-print("  tmpfs (RAM disk, 25+ GB/s)")
-print("    Ideal for small datasets that fit entirely in RAM.")
+print("  Let the DataLoader hide read latency:")
+print("    raise num_workers, keep pin_memory=True, and set prefetch_factor")
+print("    so batches are read ahead while the GPU is busy.")
 print()
 print("  DataLoader settings for Explorer (starting point):")
 print()

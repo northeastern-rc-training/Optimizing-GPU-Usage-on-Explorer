@@ -10,9 +10,8 @@ The output tells you which you got, how much VRAM is available, and whether
 SLURM isolated the GPU correctly.
 
 Usage (interactive session):
-    srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=4 --mem=16G \
+    srun --partition=gpu-short --gres=gpu:v100-sxm2:1 --cpus-per-task=4 --mem=16G \
          --time=00:30:00 --pty bash
-    module load python/3.11
     source gpu_training_env/bin/activate
     python scripts/01_gpu_verify.py
 
@@ -29,7 +28,6 @@ try:
 except ImportError:
     print("PyTorch is not installed in this environment.")
     print("Activate the training environment first:")
-    print("  module load python/3.11")
     print("  source gpu_training_env/bin/activate")
     sys.exit(1)
 
@@ -47,7 +45,7 @@ print(f"    PyTorch version  : {torch.__version__}")
 if not cuda_ok:
     print("\n  CUDA is NOT available.  Most likely causes:")
     print("  (a) You are on a login node — request a compute node:")
-    print("      srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=4 \\")
+    print("      srun --partition=gpu-short --gres=gpu:v100-sxm2:1 --cpus-per-task=4 \\")
     print("           --mem=16G --time=01:00:00 --pty bash")
     print("  (b) The training environment is not activated:")
     print("      source gpu_training_env/bin/activate")

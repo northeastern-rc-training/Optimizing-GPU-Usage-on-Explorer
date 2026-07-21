@@ -40,14 +40,12 @@ echo "========================================"
 
 python scripts/01_gpu_verify.py
 
-# ── Copy dataset to node-local storage if available ──────────────────────────
-if [ -n "$TMPDIR" ] && [ -d "$TMPDIR" ]; then
-    echo "Copying dataset to node-local storage ($TMPDIR) ..."
-    rsync -a /scratch/$USER/mydata/ $TMPDIR/mydata/   # ← CHANGE: your data path
-    DATA_DIR=$TMPDIR/mydata
-else
-    DATA_DIR=/scratch/$USER/mydata                    # ← CHANGE: your data path
-fi
+# ── Dataset location ─────────────────────────────────────────────────────────
+# All filesystems here (/home, /scratch, /projects) are network filesystems (NFS).
+# Keep your data as a few large files rather than millions of small ones, and let
+# the DataLoader (num_workers / pin_memory / prefetch_factor) hide read latency.
+DATA_DIR=/scratch/$USER/mydata                        # ← CHANGE: your data path
+echo "Using DATA_DIR=$DATA_DIR"
 
 # ── Launch DDP with torchrun ──────────────────────────────────────────────────
 # --nproc_per_node must match the number of GPUs requested above.

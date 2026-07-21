@@ -148,8 +148,8 @@ print("""
   If low (< 50%):
     • Check your data pipeline first (Section 4 of the training).
       num_workers=0 is the single most common cause.
-    • Is your data on /home?  Move it to /scratch or copy to $TMPDIR at
-      job start.
+    • Reading data over NFS?  Raise num_workers / prefetch_factor so reads
+      overlap compute, and pack the dataset into a few large files.
     • Are you requesting multiple GPUs when one would do?  Each idle GPU
       drags down your effective efficiency.
 
@@ -188,8 +188,8 @@ print()
 print(f"  2. VRAM is only ~{vram_pct:.0f}% used — increase batch size substantially.")
 print("     Script 06 shows the util gain from a right-sized workload.")
 print()
-print("  3. Move the dataset off /home to /scratch, and copy to $TMPDIR at")
-print("     job start for the fastest reads.")
+print("  3. Keep the dataset on /scratch as a few large files, and raise")
+print("     num_workers / prefetch_factor so NFS reads overlap compute.")
 print()
 print("  RULE: Run `gpu-logs <jobid>` after EVERY batch job.  If average")
 print("  utilisation stays below 60%, fix it before submitting the next run —")
