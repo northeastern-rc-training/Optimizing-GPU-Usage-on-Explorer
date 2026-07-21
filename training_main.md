@@ -64,31 +64,28 @@ That is the main principle! The training is built around this principle.
 Let's get the training materials ready before we start the demos.
 
 1. SSH to Explorer: `ssh username@login.explorer.northeastern.edu`
-2. Navigate to your scratch directory: `cd /scratch/$USER`
-3. Clone the training repo:
+2. Request an interactive GPU session for the live demos:
+   ```bash
+   srun --partition=gpu-short \
+        --gres=gpu:1 \
+        --cpus-per-task=4 \
+        --mem=16G \
+        --time=01:00:00 \
+        --pty bash
+   ```
+3. Navigate to your scratch directory: `cd /scratch/$USER`
+4. Clone the training repo:
    ```bash
    git clone https://github.com/northeastern-rc-training/Optimizing-GPU-Usage-on-Explorer
-   $cd Optimizing-GPU-Usage-on-Explorer/
-
+   cd Optimizing-GPU-Usage-on-Explorer/
    ```
-4. Set up the Python environment:
+5. Set up the Python environment:
    ```bash
-   chmod +x setup_env.sh
-   ./setup_env.sh
+   chmod +x setup_profiling_env.sh
+   ./setup_profiling_env.sh
    source profiling_env/bin/activate
    which python   # should point to profiling_env
    ```
-
-For the live demos, request an interactive GPU session:
-
-```bash
-srun --partition=gpu-short \
-     --gres=gpu:1 \
-     --cpus-per-task=4 \
-     --mem=16G \
-     --time=01:00:00 \
-     --pty bash
-```
 
 > 💡 **Question for Audience:** Why are we using `srun` here instead of `sbatch`?
 
