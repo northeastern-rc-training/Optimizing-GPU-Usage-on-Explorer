@@ -1,7 +1,7 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
-#  GPU Profiling Training — Environment Setup (Explorer)
-#  GPU Profiling and Performance Optimization on Explorer
+#  GPU Training — Environment Setup (Explorer)
+#  GPU Performance Optimization on Explorer
 #
 #  Run this script ONCE to create the Python virtual environment used
 #  throughout the training demos.
@@ -18,11 +18,11 @@
 #         cd /scratch/$USER
 #         git clone https://github.com/northeastern-rc-training/Optimizing-GPU-Usage-on-Explorer.git
 #         cd Optimizing-GPU-Usage-on-Explorer
-#         chmod +x setup_profiling_env.sh
-#         ./setup_profiling_env.sh
+#         chmod +x setup_env.sh
+#         ./setup_env.sh
 #
 #    4. Activate the environment:
-#         source profiling_env/bin/activate
+#         source gpu_training_env/bin/activate
 #
 #  Tip: add the module loads to your ~/.bashrc so they load automatically in
 #  future sessions (optional):
@@ -31,10 +31,10 @@
 
 set -euo pipefail
 
-VENV_DIR="profiling_env"
+VENV_DIR="gpu_training_env"
 
 echo "======================================================="
-echo "  GPU Profiling Training — Environment Setup (Explorer)"
+echo "  GPU Training — Environment Setup (Explorer)"
 echo "======================================================="
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────

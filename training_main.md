@@ -48,15 +48,16 @@ Many GPU jobs on HPC clusters run at a fraction of what the hardware can actuall
 > **The one thing to remember from this whole session:**
 > **Measure before you change anything. Profile first, optimize second.**
 
-That principle is what this training is built around. Every section adds one more measuring instrument to your toolkit.
+That is the main principle! The training is built around this principle. 
 
----
+
+<!---
 
 > 💡 **Presenter note:** Open a second terminal pane now.
 > Run `watch -n 1 nvidia-smi` in it (if on a GPU node) and keep it visible during the whole training.
 > This turns the training into a live show — the audience can see GPU metrics updating in real time as demos run.
 
----
+-->
 
 ## Prerequisites
 
@@ -66,13 +67,14 @@ Let's get the training materials ready before we start the demos.
 2. Navigate to your scratch directory: `cd /scratch/$USER`
 3. Clone the training repo:
    ```bash
-   git clone https://github.com/northeastern-rc-training/gpu-profiling-2026.git
-   cd gpu-profiling-2026
+   git clone https://github.com/northeastern-rc-training/Optimizing-GPU-Usage-on-Explorer
+   $cd Optimizing-GPU-Usage-on-Explorer/
+
    ```
 4. Set up the Python environment:
    ```bash
-   chmod +x setup_profiling_env.sh
-   ./setup_profiling_env.sh
+   chmod +x setup_env.sh
+   ./setup_env.sh
    source profiling_env/bin/activate
    which python   # should point to profiling_env
    ```
