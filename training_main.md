@@ -67,7 +67,7 @@ Let's get the training materials ready before we start the demos.
 2. Request an interactive GPU session for the live demos:
    ```bash
    srun --partition=gpu-short \
-        --gres=gpu:1 \
+        --gres=gpu:v100-sxm2:1 \
         --cpus-per-task=4 \
         --mem=16G \
         --time=01:00:00 \
@@ -126,7 +126,6 @@ The two key directives in any GPU SLURM script are `--gres` and `--partition`.
 
 mkdir -p logs                       # create the log dir before SLURM writes to it
 
-module load python/3.11
 python train.py
 ```
 

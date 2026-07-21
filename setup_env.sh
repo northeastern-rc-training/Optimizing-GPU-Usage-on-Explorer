@@ -8,25 +8,20 @@
 #
 #  Steps:
 #    1. Get an interactive GPU node:
-#         srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=4 --mem=16G \
+#         srun --partition=gpu-short --gres=gpu:v100-sxm2:1 --cpus-per-task=4 --mem=16G \
 #              --time=01:00:00 --pty bash
 #
-#    2. Load Python (PyTorch's CUDA runtime ships in the wheels — no CUDA module):
-#         module load python/3.11
-#
-#    3. Run this script from your scratch directory:
+#    2. Run this script from your scratch directory (the system python3 is used —
+#       this cluster has no python module, and PyTorch's CUDA runtime ships in
+#       the wheels, so no CUDA module is required either):
 #         cd /scratch/$USER
 #         git clone https://github.com/northeastern-rc-training/Optimizing-GPU-Usage-on-Explorer.git
 #         cd Optimizing-GPU-Usage-on-Explorer
 #         chmod +x setup_env.sh
 #         ./setup_env.sh
 #
-#    4. Activate the environment:
+#    3. Activate the environment:
 #         source gpu_training_env/bin/activate
-#
-#  Tip: add the module load to your ~/.bashrc so it loads automatically in
-#  future sessions (optional):
-#    module load python/3.11
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -44,7 +39,8 @@ echo "Checking prerequisites ..."
 if ! command -v python3 &>/dev/null; then
     echo ""
     echo "ERROR: python3 not found."
-    echo "Load the module first:  module load python/3.11"
+    echo "This cluster has no python module; python3 is expected to be on PATH."
+    echo "Check with:  command -v python3  &&  python3 --version"
     exit 1
 fi
 
