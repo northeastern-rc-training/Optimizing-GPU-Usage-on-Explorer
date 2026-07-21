@@ -84,20 +84,23 @@ class GpuUtilSampler(threading.Thread):
         super().__init__(daemon=True)
         self.interval = interval
         self.samples: list[int] = []
-        self._stop = threading.Event()
+        # NOTE: do NOT name this `_stop` — threading.Thread already has an
+        # internal `_stop()` method, and shadowing it with an Event breaks
+        # Thread.join() ('Event' object is not callable).
+        self._stop_event = threading.Event()
 
     def run(self) -> None:
         if not NVML_OK:
             return
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 self.samples.append(pynvml.nvmlDeviceGetUtilizationRates(_NVML_HANDLE).gpu)
             except Exception:
                 pass
-            self._stop.wait(self.interval)
+            self._stop_event.wait(self.interval)
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     @property
     def mean(self) -> float | None:
