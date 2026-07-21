@@ -1,105 +1,166 @@
 """
-Script 03: DataLoader Configuration Benchmark
------------------------------------------------
-CONCEPT: The GPU processes a batch in milliseconds. If loading the NEXT batch
-takes longer than that, the GPU sits idle — waiting for the CPU to deliver data.
-This is like a high-speed assembly line that has to stop every few seconds
-because the supply truck hasn't arrived yet.
+Script 03 — DataLoader Configuration Benchmark
+------------------------------------------------
+The NVIDIA A100 on Explorer can finish a training batch in a few milliseconds.
+If your data pipeline takes longer than that to deliver the next batch, the
+GPU stalls — it holds its VRAM allocation (and your queue time) while doing
+absolutely nothing.
 
-This script times a DataLoader under four configurations and computes
-how much of the GPU's time would be spent waiting.
+This script benchmarks four DataLoader configurations and shows how much of
+the GPU's time would be spent waiting under each one.
 
-Run:
+Explorer storage note:
+  • /home/$USER    — never train from here (50–200 MB/s, shared)
+  • /scratch/$USER — Lustre; good for large sequential reads; avoid datasets
+                     made of millions of tiny files
+  • $TMPDIR        — node-local NVMe; fastest option; copy data here at job
+                     start (see snippet below)
+  • tmpfs (RAM)    — for small datasets that fit entirely in memory
+
+Usage:
     python 03_dataloader_benchmark.py
 
-No GPU required — this measures CPU-side data loading speed.
+No GPU required — this measures CPU-side loading speed only.
 """
 
 import time
+import os
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-# ── Synthetic dataset (avoids disk I/O so we isolate loader overhead) ─────────
-N_SAMPLES    = 5_000
-IMAGE_SHAPE  = (3, 64, 64)   # small images; real ResNet uses (3, 224, 224)
-N_BATCHES    = 50             # how many batches to time
-BATCH_SIZE   = 64
+N_SAMPLES   = 8_000
+IMAGE_SHAPE = (3, 64, 64)
+BATCH_SIZE  = 64
+N_BATCHES   = 60
 
-print("=" * 60)
-print("DATALOADER CONFIGURATION BENCHMARK")
-print("=" * 60)
-print(f"Dataset  : {N_SAMPLES:,} synthetic images {IMAGE_SHAPE}")
-print(f"Batches  : {N_BATCHES} × batch_size={BATCH_SIZE}")
-print()
-
-# Build a synthetic dataset
-images = torch.randn(N_SAMPLES, *IMAGE_SHAPE)
-labels = torch.randint(0, 10, (N_SAMPLES,))
-dataset = TensorDataset(images, labels)
-
-# Simulate a realistic GPU compute time per batch (e.g., 15 ms for a small model)
+# Simulated GPU compute time per batch (milliseconds).
+# On an A100, a typical ResNet-50 forward+backward on a 64-image batch
+# completes in roughly 10–20 ms at BF16.  Adjust this to match your workload.
 SIMULATED_GPU_MS = 15.0
 
-def time_loader(loader, n_batches, label):
-    """Time n_batches iterations of loader; return mean time in ms."""
-    # Warm-up pass to spawn workers
-    for i, _ in enumerate(loader):
-        if i == 2: break
+SEP = "=" * 62
 
-    times = []
-    for i, (x, y) in enumerate(loader):
-        if i == 0:
-            t0 = time.perf_counter()
-        if i >= n_batches:
+print(SEP)
+print("  DATALOADER CONFIGURATION BENCHMARK — EXPLORER")
+print(SEP)
+print(f"  Dataset     : {N_SAMPLES:,} synthetic images {IMAGE_SHAPE}")
+print(f"  Batches     : {N_BATCHES} × batch_size={BATCH_SIZE}")
+print(f"  Simulated GPU compute/batch : {SIMULATED_GPU_MS:.0f} ms  (A100 BF16 estimate)")
+print()
+
+images  = torch.randn(N_SAMPLES, *IMAGE_SHAPE)
+labels  = torch.randint(0, 10, (N_SAMPLES,))
+dataset = TensorDataset(images, labels)
+
+cpu_count = os.cpu_count() or 4
+
+
+def benchmark_loader(loader: DataLoader, n_batches: int) -> float:
+    """Return the mean per-batch load time in milliseconds."""
+    # Warm up: let worker processes start
+    for i, _ in enumerate(loader):
+        if i >= 3:
             break
-        # Simulate moving to device (non-blocking is better, shown in config 4)
-        _ = x.float()
+
+    t0 = time.perf_counter()
+    count = 0
+    for x, _ in loader:
+        count += 1
+        if count >= n_batches:
+            break
     elapsed = time.perf_counter() - t0
-    mean_ms = elapsed / n_batches * 1000
-    return mean_ms
+    return elapsed / count * 1_000  # ms
+
 
 configs = [
-    dict(label="Config A: num_workers=0 (default)",
-         kwargs=dict(batch_size=BATCH_SIZE, num_workers=0, pin_memory=False)),
-    dict(label="Config B: num_workers=2",
-         kwargs=dict(batch_size=BATCH_SIZE, num_workers=2, pin_memory=False)),
-    dict(label="Config C: num_workers=4",
-         kwargs=dict(batch_size=BATCH_SIZE, num_workers=4, pin_memory=False)),
-    dict(label="Config D: num_workers=4 + pin_memory=True",
-         kwargs=dict(batch_size=BATCH_SIZE, num_workers=4, pin_memory=True,
-                     persistent_workers=True, prefetch_factor=2)),
+    {
+        "label": "Config A  num_workers=0  (PyTorch default)",
+        "kwargs": dict(batch_size=BATCH_SIZE, num_workers=0, pin_memory=False),
+    },
+    {
+        "label": "Config B  num_workers=2",
+        "kwargs": dict(batch_size=BATCH_SIZE, num_workers=2, pin_memory=False),
+    },
+    {
+        "label": "Config C  num_workers=4",
+        "kwargs": dict(batch_size=BATCH_SIZE, num_workers=4, pin_memory=False),
+    },
+    {
+        "label": f"Config D  num_workers=4  pin_memory  persistent_workers",
+        "kwargs": dict(
+            batch_size=BATCH_SIZE,
+            num_workers=4,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=2,
+        ),
+    },
 ]
 
 results = []
 for cfg in configs:
-    loader = DataLoader(dataset, **cfg["kwargs"])
-    mean_ms = time_loader(loader, N_BATCHES, cfg["label"])
+    loader  = DataLoader(dataset, **cfg["kwargs"])
+    mean_ms = benchmark_loader(loader, N_BATCHES)
     results.append((cfg["label"], mean_ms))
+
     print(f"  {cfg['label']}")
-    print(f"    Mean batch load time : {mean_ms:.1f} ms")
-    # Compute GPU idle fraction
-    idle_pct = max(0, (mean_ms - SIMULATED_GPU_MS) / mean_ms * 100)
+    print(f"    Mean load time per batch : {mean_ms:.1f} ms")
     if mean_ms > SIMULATED_GPU_MS:
-        print(f"    GPU would be idle    : {idle_pct:.0f}% of the time  ← DATA BOUND")
+        idle_pct = (mean_ms - SIMULATED_GPU_MS) / mean_ms * 100
+        print(f"    GPU would wait           : {idle_pct:.0f}% of the time  ← DATA BOUND")
     else:
-        print(f"    Loader faster than GPU ({SIMULATED_GPU_MS:.0f} ms compute) ← GPU BOUND ✓")
+        print(f"    Loader faster than GPU ({SIMULATED_GPU_MS:.0f} ms)    ← GPU BOUND ✓")
     print()
 
-# ── Summary table ────────────────────────────────────────────────────────────
-print("=" * 60)
-print("SUMMARY (simulated GPU compute = {:.0f} ms/batch)".format(SIMULATED_GPU_MS))
-print("=" * 60)
-print(f"  {'Configuration':<42} {'Load (ms)':>9}  {'Outcome'}")
-print(f"  {'-'*42}  {'-'*9}  {'-'*20}")
+# ── Summary table ─────────────────────────────────────────────────────────────
+print(SEP)
+print(f"  SUMMARY  (GPU compute baseline = {SIMULATED_GPU_MS:.0f} ms / batch)")
+print(SEP)
+print(f"  {'Configuration':<46} {'ms':>6}  Status")
+print(f"  {'-'*46}  {'-'*6}  {'-'*18}")
 for label, ms in results:
-    short = label.split(":")[0]
-    outcome = "GPU idle" if ms > SIMULATED_GPU_MS else "GPU bound ✓"
-    print(f"  {short:<42} {ms:>9.1f}  {outcome}")
+    tag   = label.split()[0] + " " + label.split()[1]
+    state = "GPU idle ←" if ms > SIMULATED_GPU_MS else "GPU bound ✓"
+    print(f"  {tag:<46} {ms:>6.1f}  {state}")
 
 print()
-print("HPC NOTE: On a cluster, your data may live on Lustre (shared filesystem).")
-print("          Move it to $TMPDIR (node-local SSD) at job start for 2-4× speedup:")
+print(SEP)
+print("  EXPLORER STORAGE QUICK GUIDE")
+print(SEP)
+print("  /home/$USER          (~50–200 MB/s)")
+print("    NEVER train from here.  Slow and shared — impacts other users")
+print("    and your own jobs.")
 print()
-print("  # In your SLURM script, before python:")
-print("  rsync -a /lustre/scratch/$USER/mydata/ $TMPDIR/mydata/")
-print("  python train.py --data-dir $TMPDIR/mydata/")
+print("  /scratch/$USER       (Lustre, ~1–10 GB/s aggregate)")
+print("    Good for large sequential reads.  Avoid datasets made of millions")
+print("    of tiny files (metadata overhead dominates) — pack them into HDF5")
+print("    or WebDataset first.")
+print()
+print("  $TMPDIR              (node-local NVMe, ~3–7 GB/s)")
+print("    Fastest option.  Copy your dataset here at job start:")
+print()
+print("      # In your SLURM script, before `python train.py`:")
+print("      if [ -n \"$TMPDIR\" ] && [ -d \"$TMPDIR\" ]; then")
+print("          echo 'Copying dataset to node-local storage ...'")
+print("          rsync -a /scratch/$USER/mydata/ $TMPDIR/mydata/")
+print("          DATA_DIR=$TMPDIR/mydata")
+print("      else")
+print("          DATA_DIR=/scratch/$USER/mydata")
+print("      fi")
+print("      python train.py --data-dir $DATA_DIR")
+print()
+print("  tmpfs (RAM disk, 25+ GB/s)")
+print("    Ideal for small datasets that fit entirely in RAM.")
+print()
+print("  DataLoader settings for Explorer (starting point):")
+print()
+print("    from torch.utils.data import DataLoader")
+print("    loader = DataLoader(")
+print("        dataset,")
+print("        batch_size=256,")
+print("        num_workers=max(1, cpus_per_task - 1),  # match --cpus-per-task")
+print("        pin_memory=True,")
+print("        persistent_workers=True,")
+print("        prefetch_factor=2,")
+print("    )")
+print(SEP)

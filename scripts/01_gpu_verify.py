@@ -1,92 +1,135 @@
 """
-Script 01: Verify GPU Allocation
----------------------------------
-Run this at the TOP of every GPU job to confirm you have what you requested.
-Works on both GPU nodes and CPU-only machines (will report "no CUDA").
+Script 01 — GPU Verification on Explorer
+------------------------------------------
+Run this at the TOP of every GPU job to confirm you received the hardware you
+requested and that CUDA is reachable.  Takes under 5 seconds.
 
-On a GPU node:
-    python 01_gpu_verify.py
+On Explorer you will typically see an NVIDIA A100 (80 GB) or a V100 (32 GB),
+depending on the partition and node you land on.  The output tells you which
+you got, how much VRAM is available, and whether SLURM isolated the GPU
+correctly.
 
-Expected output on a GPU node:
-    CUDA available: True
-    GPU count: 1
-      GPU 0: NVIDIA A100-SXM4-80GB  80 GB
-    CUDA_VISIBLE_DEVICES: 0
-    ...nvidia-smi output...
+Usage (interactive session):
+    srun --partition=gpu-short --gres=gpu:1 --cpus-per-task=4 --mem=16G \
+         --time=00:30:00 --pty bash
+    module load cuda/12.2 python/3.11
+    source profiling_env/bin/activate
+    python scripts/01_gpu_verify.py
+
+Expected output on an A100 node:
+    GPU 0: NVIDIA A100-SXM4-80GB   80.0 GB   SMs: 108
 """
 
 import os
 import subprocess
 import sys
 
-# ── Check 1: Is CUDA (the GPU driver bridge) reachable? ───────────────────────
 try:
     import torch
-    cuda_available = torch.cuda.is_available()
 except ImportError:
     print("PyTorch is not installed in this environment.")
+    print("Activate the training environment first:")
+    print("  module load cuda/12.2 python/3.11")
+    print("  source profiling_env/bin/activate")
     sys.exit(1)
 
-print("=" * 55)
-print("GPU VERIFICATION REPORT")
-print("=" * 55)
+SEP = "=" * 58
 
-print(f"\n[1] CUDA available : {cuda_available}")
-print(f"    PyTorch version : {torch.__version__}")
+print(SEP)
+print("  GPU VERIFICATION REPORT — EXPLORER")
+print(SEP)
 
-if not cuda_available:
-    print("\n  CUDA is NOT available. Most likely causes:")
-    print("  (a) You are on a login node — request a compute node first:")
-    print("      srun --partition=gpu --gres=gpu:1 --pty bash")
-    print("  (b) The cuda module is not loaded:")
+# ── 1. CUDA availability ──────────────────────────────────────────────────────
+cuda_ok = torch.cuda.is_available()
+print(f"\n[1] CUDA available  : {cuda_ok}")
+print(f"    PyTorch version  : {torch.__version__}")
+
+if not cuda_ok:
+    print("\n  CUDA is NOT available.  Most likely causes:")
+    print("  (a) You are on a login node — request a compute node:")
+    print("      srun --partition=gpu-short --gres=gpu:1 --cpus-per-task=4 \\")
+    print("           --mem=16G --time=01:00:00 --pty bash")
+    print("  (b) The CUDA module was not loaded:")
     print("      module load cuda/12.2")
-    print("  (c) Your SLURM --gres directive has a typo.")
-    print("\n  Nothing below this line will be meaningful without a GPU.")
-    print("=" * 55)
+    print("  (c) Your --gres directive in the SLURM script has a typo.")
+    print()
+    print("  Nothing below this line is meaningful without a GPU.")
+    print(SEP)
     sys.exit(0)
 
-# ── Check 2: How many GPUs, and which ones? ────────────────────────────────────
+# ── 2. Enumerate GPUs ─────────────────────────────────────────────────────────
 gpu_count = torch.cuda.device_count()
-print(f"\n[2] GPU count      : {gpu_count}")
+print(f"\n[2] GPU count       : {gpu_count}")
 
 for i in range(gpu_count):
-    props = torch.cuda.get_device_properties(i)
-    vram_gb = props.total_memory / 1024**3
-    print(f"    GPU {i}: {props.name}")
+    p = torch.cuda.get_device_properties(i)
+    vram_gb = p.total_memory / 1024 ** 3
+    print(f"    GPU {i}: {p.name}")
     print(f"           VRAM : {vram_gb:.1f} GB")
-    print(f"           SMs  : {props.multi_processor_count}")
+    print(f"           SMs  : {p.multi_processor_count}")
 
-# ── Check 3: CUDA_VISIBLE_DEVICES — what SLURM gave us ─────────────────────────
+    # Sanity-check the expected Explorer GPUs and hint at the right precision
+    name_lower = p.name.lower()
+    if "a100" in name_lower or "h100" in name_lower:
+        print(f"           ✓  Ampere/Hopper — use BF16 (no GradScaler needed)")
+    elif "v100" in name_lower or "t4" in name_lower:
+        print(f"           ✓  Volta/Turing — use FP16 with GradScaler (no BF16 HW)")
+    else:
+        print(f"           ⚠  Unrecognised GPU — confirm your partition/--gres")
+
+# ── 3. CUDA_VISIBLE_DEVICES ───────────────────────────────────────────────────
 cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "NOT SET")
 print(f"\n[3] CUDA_VISIBLE_DEVICES : {cvd}")
 if cvd == "NOT SET":
-    print("    (This is fine for single-GPU jobs without SLURM)")
+    print("    (normal in an srun interactive session without explicit SLURM binding)")
 
-# ── Check 4: Cross-verify with nvidia-smi ─────────────────────────────────────
+# ── 4. Cross-verify with nvidia-smi ──────────────────────────────────────────
 print("\n[4] nvidia-smi cross-check:")
 try:
     result = subprocess.run(
-        ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.free,uuid",
-         "--format=csv,noheader"],
-        capture_output=True, text=True
+        [
+            "nvidia-smi",
+            "--query-gpu=index,name,memory.total,memory.free,power.limit,uuid",
+            "--format=csv,noheader",
+        ],
+        capture_output=True,
+        text=True,
     )
     if result.returncode == 0:
         for line in result.stdout.strip().splitlines():
             print(f"    {line}")
     else:
-        print("    nvidia-smi not available or returned an error.")
+        print("    nvidia-smi returned a non-zero exit code.")
 except FileNotFoundError:
-    print("    nvidia-smi binary not found (expected on GPU nodes).")
+    print("    nvidia-smi not found — load the CUDA module first.")
 
-# ── Check 5: Quick tensor round-trip test ────────────────────────────────────
-print("\n[5] Quick tensor round-trip test:")
+# ── 5. Tensor round-trip test ─────────────────────────────────────────────────
+print("\n[5] Tensor round-trip (CPU → GPU → CPU):")
 try:
     x = torch.tensor([1.0, 2.0, 3.0]).cuda()
     y = (x * 2).cpu()
-    print(f"    CPU → GPU → CPU: {y.tolist()}  ✓")
-except Exception as e:
-    print(f"    FAILED: {e}")
+    print(f"    Input  : [1.0, 2.0, 3.0]")
+    print(f"    Output : {y.tolist()}  ✓")
+except Exception as exc:
+    print(f"    FAILED: {exc}")
 
-print("\n" + "=" * 55)
-print("All checks complete. If checks 1–5 pass, your GPU is ready.")
-print("=" * 55)
+# ── 6. Explorer reminders ─────────────────────────────────────────────────────
+print()
+print(SEP)
+print("  EXPLORER REMINDERS")
+print(SEP)
+print("  • Profile & develop on the short/interactive partitions:")
+print("      gpu-short (2 h), gpu-interactive (2 h), sharing (1 h)")
+print("    Submit tuned production jobs with sbatch to:")
+print("      gpu (8 h), multigpu (24 h — requires separate access)")
+print()
+print("  • Confirm utilisation early with `nvidia-smi` or `nvitop` in a")
+print("    second terminal.  A loaded-but-idle GPU means wasted allocation.")
+print()
+print("  • After a batch job finishes, review the utilisation time-series:")
+print("      gpu-logs <jobid>")
+print()
+print("  • Run this script at the START of every job — it takes <5 seconds.")
+print()
+print("  All checks complete.")
+print(SEP)

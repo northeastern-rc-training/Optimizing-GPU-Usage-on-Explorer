@@ -1,5 +1,5 @@
 
-<img src="images/NU_logo_white.png" alt="drawing" width="900"/>
+<img src="NU_logo_small.png" alt="Northeastern University" width="900"/>
 
 <br>
 <br>
@@ -29,6 +29,7 @@ By the end of this training you will be able to:
 5. [Understand GPU memory vs utilization and tune both](#section-5-memory-vs-utilization-two-different-problems)
 6. [Decide when (and when not) to scale to multiple GPUs](#section-6-when-and-when-not-to-scale-to-multiple-gpus)
 7. [Apply a repeatable optimization workflow to any GPU job](#section-7-the-repeatable-optimization-workflow)
+8. [Review your efficiency after a run with `gpu-logs`](#section-7-the-repeatable-optimization-workflow)
 
 All materials are available at [GPU Profiling Training GitHub Repo](https://github.com/northeastern-rc-training/gpu-profiling-2026).
 
@@ -123,6 +124,10 @@ The two key directives in any GPU SLURM script are `--gres` and `--partition`.
 #SBATCH --gres=gpu:a100:1           # request 1 × A100 specifically
 #SBATCH --mem=32G                   # this is CPU RAM, not GPU VRAM
 #SBATCH --time=04:00:00
+#SBATCH --output=logs/%x_%j.out     # %x = job name, %j = job id
+#SBATCH --error=logs/%x_%j.err
+
+mkdir -p logs                       # create the log dir before SLURM writes to it
 
 module load cuda/12.2 python/3.11
 python train.py
@@ -134,6 +139,9 @@ A few points worth pausing on:
 - `--mem=32G` is **CPU RAM**, not GPU memory. GPU VRAM is allocated automatically when you get the GPU.
 - `--cpus-per-task=8` matters more than most people think. We will see exactly why in Section 4.
 - The `module load cuda/12.2` line is required. Without it, PyTorch cannot find the GPU driver and `torch.cuda.is_available()` returns `False`.
+- Create the `logs/` directory before submitting (or `mkdir -p logs` inside the script), or SLURM may fail to write its output files.
+
+> 💡 **Tip:** Runnable SLURM templates live in `slurm/` — `a100_single_gpu.slurm` for single-GPU training and `ddp_multigpu.slurm` for multi-GPU DDP. Copy one and edit the values marked `← CHANGE`.
 
 ### 1.2 GPU Partitions on Explorer
 
@@ -282,6 +290,16 @@ Different tools answer different questions:
 
 You rarely need to go all the way to the kernel level. Most problems are visible at the system or framework layer.
 
+**Example: how you escalate through the layers in practice**
+
+You run a ResNet training job and `nvidia-smi` shows GPU utilization at 18%. That tells you *something is wrong* — but not what.
+
+1. **System layer** (`nvidia-smi`): utilization 18%, memory 72%. The model is loaded but the GPU is barely working. Probably data starvation.
+2. **Framework layer** (PyTorch Profiler): you run 20 steps and read the table. `DataLoader.__next__` is at the top with 1.8 seconds of CPU time and 0 CUDA time. Confirmed: the loader is the bottleneck.
+3. **Timeline layer** (`nsys`): you open the `.nsys-rep` file and see the GPU kernel rows are nearly empty — long stretches of white between short orange bursts of compute. The CPU rows show file read system calls consuming the gaps. This tells you the bottleneck is I/O on the dataset, not CPU processing or the model itself.
+
+You never needed to go to the kernel level. The fix — moving the dataset to `$TMPDIR` and setting `num_workers=8` — is visible at layer 2. The nsys timeline just confirms it.
+
 ### 3.2 Interactive Sessions: Profile Here, Not in Batch
 
 > 💡 **This is one of the most important workflow habits to build.**
@@ -336,6 +354,40 @@ with profile(
 print(prof.key_averages().table(sort_by='cuda_time_total', row_limit=15))
 ```
 
+**Example — profiler output from a data-starved run:**
+
+```
+-----------------------------------------------  -----------  -----------  ------
+Name                                             CPU total    CUDA total   Calls
+-----------------------------------------------  -----------  -----------  ------
+DataLoader.__next__                              1.843s       0.000s       20
+aten::conv2d                                     0.041s       0.394s       160
+aten::batch_norm                                 0.019s       0.087s       160
+aten::relu_                                      0.007s       0.029s       160
+aten::copy_ (host to device)                     0.017s       0.052s       20
+aten::addmm                                      0.011s       0.038s       40
+-----------------------------------------------  -----------  -----------  ------
+```
+
+`DataLoader.__next__` is at the top with **1.843 seconds of CPU time and zero CUDA time**. During every one of those 20 load calls, the GPU was completely idle. Total GPU compute time across all operators is under 0.6 seconds. The GPU is busy for roughly 25% of wall time — which matches the 25% utilization you saw in `nvidia-smi`.
+
+**Example — profiler output from the same model after fixing the DataLoader:**
+
+```
+-----------------------------------------------  -----------  -----------  ------
+Name                                             CPU total    CUDA total   Calls
+-----------------------------------------------  -----------  -----------  ------
+aten::conv2d                                     0.041s       0.394s       160
+aten::batch_norm                                 0.019s       0.087s       160
+aten::relu_                                      0.007s       0.029s       160
+aten::addmm                                      0.011s       0.038s       40
+aten::copy_ (host to device)                     0.017s       0.052s       20
+DataLoader.__next__                              0.024s       0.000s       20
+-----------------------------------------------  -----------  -----------  ------
+```
+
+Now `DataLoader.__next__` has dropped to 0.024 seconds — it prefetches the next batch in background workers while the GPU processes the current one. Compute operators dominate. `nvidia-smi` will now show 80%+ utilization.
+
 **How to read the profiler table:**
 
 - `Name` — the operator or function. Your custom `record_function("my_layer")` labels appear here.
@@ -364,6 +416,20 @@ scp cluster:/scratch/$USER/profile_*.nsys-rep ./
 ```
 
 > **Important:** Profile for only 1–2 epochs or use `--duration` to limit capture time. A full 100-epoch profile produces gigabyte-sized files and is difficult to analyze.
+
+**What common problems look like in the nsys timeline:**
+
+When you open the `.nsys-rep` file in the Nsight Systems GUI, you see horizontal rows — one per CPU thread and one per GPU stream. Here is what to look for:
+
+| Pattern you see on the timeline | What it means | Fix |
+|---|---|---|
+| GPU row is mostly white with short orange bursts | GPU is idle between batches — data not arriving fast enough | Increase `num_workers`, move data to `$TMPDIR` |
+| CPU rows show `read()` system calls filling the gaps between GPU kernels | I/O bottleneck — data is being read from a slow filesystem during training | Copy dataset to `$TMPDIR` before training starts |
+| `cudaMemcpy HtoD` calls appear scattered throughout the step, not at the beginning | Tensors are being moved to GPU inside the training loop, not in the DataLoader | Add `pin_memory=True`, do `.to(device)` in the DataLoader worker |
+| GPU row is dense (orange), but a periodic gap appears every N steps | Gradient synchronization stall in multi-GPU training | Tune `--nproc_per_node`, overlap communication with `find_unused_parameters=False` |
+| Two GPU streams alternate — one idle while the other runs | Forward and backward passes not overlapping | This is normal for single-GPU DDP; only a concern in pipeline parallelism |
+
+**Concrete example:** You run `nsys profile` on a training job and open the report. The GPU kernel row (CUDA HW row) shows orange activity for about 15ms, then a 50ms white gap, then 15ms of orange again. That 50ms gap is the GPU waiting for the next batch. You hover over the CPU thread row and see `pthread` calls to `read()` filling that gap — confirming the data is being read from Lustre during training. Fix: `rsync` the dataset to `$TMPDIR` at job start. After the fix, the white gaps shrink to under 5ms.
 
 > **Section 3 takeaway:** Start with nvidia-smi. If utilization is low, run the PyTorch Profiler for 20 steps. Read the CUDA time column. The biggest entry there is where you should look first.
 
@@ -438,6 +504,10 @@ python train.py --data-dir $TMPDIR/mydata/
 > **For MD simulation users:** If you run GROMACS or NAMD and your input files are on `/home` or `/scratch`, consider copying them to `$TMPDIR` at job start. The I/O overhead on trajectory outputs is the same problem.
 
 ### 4.3 DataLoader Parameters — The Four Knobs
+
+A **DataLoader** (PyTorch's `torch.utils.data.DataLoader`) is the component that feeds your model. It takes a `Dataset` and handles the plumbing between disk and GPU: reading samples, collating them into batches, shuffling, and — crucially — doing this work on **CPU worker processes in parallel** so the next batch is ready before the GPU finishes the current one.
+
+Why it matters for utilization: a GPU can only train as fast as it is fed. If data loading is serial (the default, `num_workers=0`), the GPU sits idle waiting for each batch — the data starvation we just diagnosed. The four knobs below control how aggressively the DataLoader prefetches and parallelises that work, and tuning them is usually the highest-leverage, lowest-effort fix for low GPU utilization.
 
 ```python
 from torch.utils.data import DataLoader
@@ -572,14 +642,20 @@ with autocast(device_type='cuda', dtype=torch.bfloat16):
 loss.backward()   # gradients automatically stay in FP32
 ```
 
-**FP16 vs BF16 — which to use?**
+**Which precision should you use on Explorer?**
 
-| | FP16 | BF16 |
-|---|---|---|
-| GPU support | V100, T4, A100, H100 | A100, H100 (preferred) |
-| Memory savings | ~50% activation memory | ~50% activation memory |
-| Numerical stability | Can underflow; needs `GradScaler` | Same dynamic range as FP32; no scaler needed |
-| Recommended for | V100 / T4 nodes | A100 / H100 nodes (Explorer's modern hardware) |
+| Precision | Bytes (exp/mantissa) | When to use on Explorer | Key tradeoff |
+|---|---|---|---|
+| FP32 | 4 (8 / 23) | Debugging / baseline only | Full precision + range, but slowest and 2× the memory of 16-bit; the baseline to compare against |
+| BF16 | 2 (8 / 7) | **Default on A100 / H100** | Keeps FP32's range (no `GradScaler`) but coarser precision — safe because master weights and reductions stay FP32 |
+| FP16 | 2 (5 / 10) | V100 / T4 (no BF16 hardware) | More mantissa than BF16, but a 5-bit exponent underflows → **requires `GradScaler`** |
+
+> **Tradeoffs in one line:** every step down from FP32 trades **numerical quality for speed and memory** — but it is not a simple "lower is better" progression. A few things to keep in mind:
+>
+> - **Range vs. precision.** A 16-bit format must split its bits between exponent (range) and mantissa (precision). BF16 keeps FP32's 8 exponent bits (so gradients don't underflow → no `GradScaler`), at the cost of precision. FP16 makes the opposite bet: more precision, but a 5-bit exponent that underflows and *forces* loss scaling. On A100/H100, BF16's bet is the right one.
+> - **"Mixed" precision is the safety net.** BF16 training is only stable because the risky parts stay in FP32 — master weights, the loss, softmax, and normalization reductions. `autocast` handles this automatically; casting *everything* to BF16 would often diverge.
+> - **Memory savings are partial.** BF16 roughly halves *activation* memory, but FP32 master weights + Adam optimizer states are unchanged, so total VRAM does not drop by a full 2×.
+> - **Speedup is op-dependent.** The Tensor Core speedup applies to matmuls and convolutions; memory-bound or elementwise ops see little benefit.
 
 ```bash
 # Demo: FP32 vs BF16 memory and throughput
@@ -668,6 +744,16 @@ The cost of the all-reduce grows with model size and shrinks with interconnect b
 ### 6.3 DDP in PyTorch
 
 DistributedDataParallel (DDP) is the correct way to do data-parallel training in PyTorch. Do not use the older `DataParallel` — it has GIL contention and is slower.
+
+**First, confirm your code is actually written for DDP.** If you run a plain PyTorch script with `--gres=gpu:4`, SLURM allocates 4 GPUs but your code will only use the first one — `model.cuda()` moves the model to device 0 and the other three sit idle (and drag down your efficiency).
+
+```python
+# Quick check: does this process participate in a DDP group?
+import torch, torch.distributed as dist
+print(dist.is_available())          # must be True
+print(dist.is_initialized())        # must be True *after* dist.init_process_group()
+print(torch.cuda.device_count())    # should match --gres=gpu:N
+```
 
 ```python
 # launch_ddp.py — called via torchrun, not python directly
@@ -764,11 +850,36 @@ OOM error?
   └─ Reduce batch size → enable mixed precision → gradient checkpointing (in this order)
 ```
 
-### 7.3 Pre-Submission Checklist
+### 7.3 gpu-logs — Your Post-Job Efficiency Report
+
+Explorer provides **`gpu-logs`**, a post-job tool that reports the time-series of GPU utilization over your entire run. It is the post-job equivalent of watching `watch -n 1 nvidia-smi` live during the job.
+
+```bash
+gpu-logs <jobid>
+
+# Example
+gpu-logs 2374457
+```
+
+What to look for:
+- **Average GPU utilization** over the whole job — target > 70%.
+- **The shape of the curve.** A flat, high line is healthy. A line that bounces between low values is data starvation. A flat, low line means the workload is too small for the GPU.
+- **Average VRAM** — low usage means you have headroom for a larger batch.
+
+```bash
+# Demo: an illustrated gpu-logs report and how to read each metric
+python scripts/07_gpu_logs_guide.py
+```
+
+**Make reviewing `gpu-logs` a habit:**
+
+> After every batch job → run `gpu-logs <jobid>` → if average GPU utilization < 60%, fix it before submitting the next run.
+
+### 7.4 Pre-Submission Checklist
 
 Before submitting any GPU batch job, verify these items — ideally in an `srun` session first:
 
-- [ ] `01_gpu_verify.py` passes (or equivalent checks) — you confirmed device name and VRAM
+- [ ] `scripts/01_gpu_verify.py` passes — you confirmed device name and VRAM
 - [ ] `nvidia-smi` during a short run shows utilization > 70%
 - [ ] `num_workers` in DataLoader is set (not 0) and equals `cpus-per-task - 1`
 - [ ] `pin_memory=True` is set in DataLoader
@@ -777,9 +888,10 @@ Before submitting any GPU batch job, verify these items — ideally in an `srun`
 - [ ] Mixed precision enabled if on A100/H100 (just three lines of code)
 - [ ] SLURM script requests the right GPU type (`gpu:a100:1`, not just `gpu:1`)
 - [ ] `--cpus-per-task` is at least 4 (preferably matching `num_workers + 1`)
+- [ ] `logs/` directory exists (or `mkdir -p logs` in the script)
 - [ ] You have profiled for 20–50 steps and read the output
 
-### 7.4 HPC Hygiene Tips
+### 7.5 HPC Hygiene Tips
 
 **Use `srun` for profiling and development.** Only use `sbatch` once your code is tuned and needs to run for hours.
 
@@ -789,11 +901,7 @@ Before submitting any GPU batch job, verify these items — ideally in an `srun`
 
 **Record your baselines.** Before any optimization, write down: GPU utilization, throughput in samples/sec, wall time. Without a baseline, you cannot measure improvement.
 
-**Use `gpu-logs <jobid>` after a job finishes** to see the time-series of GPU utilization over the entire job run.
-
-```bash
-gpu-logs 2374457
-```
+**Review `gpu-logs <jobid>` after every batch job** to confirm the run actually used the GPU (see Section 7.3).
 
 **The profiling mindset.** Spending 10 minutes profiling saves hours of wasted compute and queue time. Frame it as an investment, not overhead.
 
@@ -859,6 +967,23 @@ Review our [Documentation](https://rc-docs.northeastern.edu/en/latest/index.html
 | Want to know which layer costs the most | PyTorch Profiler | `scripts/04_pytorch_profiler_demo.py` |
 | OOM / want to fit larger batch | Enable mixed precision | `scripts/05_mixed_precision_demo.py` |
 | Want to watch memory during training | Memory monitor | `scripts/06_memory_monitor.py` |
+| Reviewing a finished batch job | gpu-logs guide | `scripts/07_gpu_logs_guide.py` |
+
+---
+
+## Explorer at a Glance (Reference)
+
+| Item | Value |
+|---|---|
+| Login | `ssh <username>@login.explorer.northeastern.edu` |
+| GPU partitions | `gpu-short` (2 h), `gpu` (8 h), `multigpu` (24 h), `gpu-interactive` (2 h), `sharing` (1 h) |
+| GPU types | NVIDIA A100 (80 GB), V100 (32 GB) |
+| CUDA module | `cuda/12.2` |
+| Python module | `python/3.11` |
+| Environment | `venv` (`profiling_env`) |
+| Fast local storage | `$TMPDIR` (node-local NVMe); `/scratch` (Lustre) |
+| Post-job efficiency | `gpu-logs <jobid>` |
+| Preferred precision | BF16 on A100/H100; FP16 on V100/T4 |
 
 ---
 
