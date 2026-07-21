@@ -10,30 +10,39 @@ training run, both VRAM usage AND GPU utilisation evolve:
   5. Backward pass: peak usage
   6. After optimizer.step() and zero_grad(): partial release
 
-The trap on Explorer: even a V100 (32 GB) is fast enough that a small model /
-small batch / FP32 workload leaves it mostly idle.  Kernel-launch and Python
-overhead dominate, and BOTH memory and utilisation stay low — often < 40% util
-even though "the code runs fine".
+The trap on Explorer: even a V100 (32 GB) is fast enough that a small-batch,
+FP32 workload leaves it mostly idle.  Each step's kernels finish almost
+instantly, so per-step launch/sync overhead dominates and utilisation stays
+low even though "the code runs fine".
 
-This script demonstrates the fix directly.  It runs the SAME model twice:
+This script demonstrates the fix directly.  It runs the SAME TASK twice —
+identical input size and model, so throughput (img/s) is a fair, apples-to-
+apples comparison.  Only the *execution* changes:
 
-  1. BASELINE  — an undersized config (small batch, tiny images, FP32)
-                 → the < 40% utilisation you are seeing.
-  2. TUNED     — a GPU-appropriate config (large batch, larger images,
-                 wider model, 16-bit autocast (BF16/FP16), channels_last,
-                 GPU-resident data) → high, healthy utilisation.
+  1. BASELINE  — tiny batch, FP32, contiguous memory.  Small batches leave the
+                 GPU's SMs mostly idle; launch/sync overhead dominates.
+  2. TUNED     — large batch, 16-bit autocast (BF16 on A100/H100, FP16 on
+                 V100/T4), and channels_last memory format → higher utilisation
+                 AND higher throughput on the very same workload.
 
 For each phase it measures peak VRAM, mean/max GPU utilisation (sampled live
 from NVML), and throughput, then prints exactly WHAT changed and WHY
 utilisation went up.
 
+Note we do NOT scale the image resolution or model width between phases — that
+would change how much work each image costs, making img/s meaningless to
+compare.  Resolution and width are properties of your task; batch size,
+precision, and memory format are execution knobs you tune for free.
+
 Explorer hardware context:
   V100  — 32 GB VRAM  (demo default; no BF16 hardware, so the script uses FP16)
   A100  — 80 GB VRAM  (larger; supports BF16 Tensor Cores)
 
-Having lots of VRAM does NOT mean you should leave it mostly empty.
-Low memory usage + low utilisation = wasted hardware.
-Goal: utilisation 80-100%, memory 75-90%.
+A fast GPU does NOT help if you feed it tiny batches — low utilisation is
+wasted hardware.  Goal: keep utilisation at 80-100% with a batch large enough
+to saturate the SMs, and mixed precision to feed the Tensor Cores.  (This demo
+uses a small model, so its VRAM footprint stays low; on a real model you would
+also aim to fill 75-90% of VRAM.)
 
 Usage:
     python 06_memory_monitor.py                 (GPU strongly recommended)
@@ -72,6 +81,12 @@ DEVICE          = "cuda" if torch.cuda.is_available() else "cpu"
 EPOCHS          = 3
 STEPS_PER_EPOCH = 40
 WARMUP_STEPS    = 8
+
+# The task is held FIXED across both phases (identical input size and model),
+# so throughput in img/s is a valid apples-to-apples comparison.  Only the
+# *execution* changes between phases: batch size, precision, and memory format.
+FIXED_RES   = 64
+FIXED_WIDTH = 96
 
 SEP = "=" * 72
 
@@ -239,28 +254,41 @@ def run_phase(name: str, cfg: dict) -> dict:
 
 # ── Config selection ────────────────────────────────────────────────────────────
 def best_amp_dtype():
-    """BF16 on A100/H100; fall back to FP16 on V100/T4 (no BF16 hardware)."""
+    """BF16 on A100/H100 (sm_80+); FP16 on V100/T4.  V100/T4 have FP16 Tensor
+    Cores but NO BF16 hardware.  We check compute capability rather than
+    torch.cuda.is_bf16_supported(), which returns True even on a V100 (it
+    reports software support) and would pick a format the Tensor Cores can't
+    accelerate."""
     if DEVICE != "cuda":
         return None
-    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    major = torch.cuda.get_device_capability()[0]
+    return torch.bfloat16 if major >= 8 else torch.float16
 
 
 def baseline_config() -> dict:
-    # Deliberately undersized — this is the < 40% util workload.
-    return {"batch": 64, "res": 32, "width": 64, "amp": None, "channels_last": False}
+    # Same task as the tuned phase — only the batch is deliberately tiny.
+    # Small batches leave the SMs idle; launch/sync overhead dominates.
+    return {"batch": 8, "res": FIXED_RES, "width": FIXED_WIDTH,
+            "amp": None, "channels_last": False}
 
 
 def tuned_config() -> dict:
-    """Scale the tuned workload to the GPU actually present."""
+    """SAME task as the baseline (same res + width).  Only the execution knobs
+    change: a large batch (scaled to the GPU present), mixed precision, and
+    channels_last memory format."""
     if DEVICE != "cuda":
-        return {"batch": 128, "res": 48, "width": 96, "amp": None, "channels_last": False}
-    gb = total_vram_gb()
+        return {"batch": 64, "res": FIXED_RES, "width": FIXED_WIDTH,
+                "amp": None, "channels_last": False}
+    gb  = total_vram_gb()
     amp = best_amp_dtype()
     if gb > 70:       # A100 (80 GB)
-        return {"batch": 512, "res": 96, "width": 192, "amp": amp, "channels_last": True}
-    if gb > 24:       # V100 (32 GB)
-        return {"batch": 256, "res": 80, "width": 128, "amp": amp, "channels_last": True}
-    return {"batch": 128, "res": 64, "width": 96, "amp": amp, "channels_last": True}
+        batch = 512
+    elif gb > 24:     # V100 (32 GB)
+        batch = 256
+    else:
+        batch = 128
+    return {"batch": batch, "res": FIXED_RES, "width": FIXED_WIDTH,
+            "amp": amp, "channels_last": True}
 
 
 def run_with_oom_guard(name: str, cfg: dict) -> dict:
@@ -291,10 +319,8 @@ def main() -> None:
     if DEVICE == "cuda":
         gb = total_vram_gb()
         print(f"  GPU    : {torch.cuda.get_device_name(0)}  ({gb:.1f} GB VRAM)")
-        if gb > 70:
-            print("  ↳ A100 (80 GB) — powerful; small workloads leave it idle.")
-        elif gb > 24:
-            print("  ↳ V100 (32 GB) — no BF16 hardware; tuned phase uses FP16.")
+        amp_name = precision_label(best_amp_dtype()).split()[0]  # "BF16" / "FP16"
+        print(f"  ↳ tuned phase will use {amp_name} autocast on this GPU.")
     if not NVML_OK:
         print("  NVML   : not available — install `nvidia-ml-py` for live utilisation.")
     else:
@@ -318,22 +344,23 @@ def main() -> None:
     print("  WHAT CHANGED  (baseline → tuned)")
     print(SEP)
     b, t = baseline_config(), tuned_cfg
+    print(f"  Task held FIXED : {FIXED_RES}x{FIXED_RES} input, model width "
+          f"{FIXED_WIDTH} → {FIXED_WIDTH*4}")
+    print(f"  (same work per image, so img/s is a fair comparison)")
+    print()
     rows = [
-        ("Batch size",   f"{b['batch']}", f"{t['batch']}",
-         "more samples per kernel launch → less launch/Python overhead"),
-        ("Resolution",   f"{b['res']}x{b['res']}", f"{t['res']}x{t['res']}",
-         "bigger tensors → larger, more efficient GEMMs/convolutions"),
-        ("Model width",  f"{b['width']}", f"{t['width']}",
-         "more channels → more arithmetic per byte moved"),
-        ("Precision",    precision_label(b["amp"]), precision_label(t["amp"]),
+        ("Batch size",    f"{b['batch']}", f"{t['batch']}",
+         "more samples per kernel launch → amortises launch/sync overhead"),
+        ("Precision",     precision_label(b["amp"]), precision_label(t["amp"]),
          "engages Tensor Cores, ~halves activation bytes"),
-        ("Data feed",    "new randn/step", "preallocated on GPU",
-         "removes per-step host overhead → GPU never waits"),
+        ("Memory format", "contiguous" if not b["channels_last"] else "channels_last",
+         "channels_last" if t["channels_last"] else "contiguous",
+         "channels_last matches the Tensor Core layout for convolutions"),
     ]
-    print(f"  {'Lever':<13}{'baseline':<16}{'tuned':<16}why it raises utilisation")
-    print(f"  {'-'*13}{'-'*16}{'-'*16}{'-'*30}")
+    print(f"  {'Lever':<15}{'baseline':<16}{'tuned':<16}why it raises utilisation")
+    print(f"  {'-'*15}{'-'*16}{'-'*16}{'-'*30}")
     for lever, bv, tv, why in rows:
-        print(f"  {lever:<13}{bv:<16}{tv:<16}{why}")
+        print(f"  {lever:<15}{bv:<16}{tv:<16}{why}")
     print()
 
     print(SEP)
@@ -352,10 +379,13 @@ def main() -> None:
         print(f"  → GPU utilisation rose from {base['util_mean']:.0f}% "
               f"to {tuned['util_mean']:.0f}%.")
     print()
-    print("  Takeaway: on a fast GPU like the V100, < 40% utilisation usually")
-    print("  means the workload is too small for the hardware, NOT that the GPU")
-    print("  is slow.  Scale batch, resolution, and model width, and enable")
-    print("  mixed precision — then re-check nvidia-smi.")
+    print("  Takeaway: on a fast GPU like the V100, low utilisation usually")
+    print("  means you are feeding it too little per step, NOT that the GPU is")
+    print("  slow.  For the SAME task, increase the batch size, enable mixed")
+    print("  precision, and use channels_last — then re-check nvidia-smi.")
+    print("  (Resolution and model width are part of your task, not tuning")
+    print("  knobs — changing them changes the work, so don't compare img/s")
+    print("  across different values.)")
     print(SEP)
 
 
