@@ -67,7 +67,7 @@ Let's get the training materials ready before we start the demos.
 2. Request an interactive GPU session for the live demos:
    ```bash
    srun --partition=gpu-short \
-        --gres=gpu:v100:1 \
+        --gres=gpu:1 \
         --cpus-per-task=4 \
         --mem=16G \
         --time=01:00:00 \
