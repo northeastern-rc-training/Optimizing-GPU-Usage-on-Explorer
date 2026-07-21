@@ -16,14 +16,14 @@ Research Computing Specialist
 
 ## GPU Profiling and Performance Optimization on Explorer
 
-Welcome to another session in the [Research Computing Spring 2026 Training Series](https://rc.northeastern.edu/research-computing-spring-training/)!
+Welcome to another session in the [Research Computing Summer 2026 Training Series](https://rc.northeastern.edu/research-computing-summer-training/)!
 
 This session is for anyone who runs GPU jobs on the Explorer cluster and wants to understand whether those jobs are actually running efficiently — and what to do when they are not.
 
 By the end of this training you will be able to:
 
 1. [Confirm that your GPU job got the hardware you requested](#section-1-do-you-even-have-the-gpu)
-2. [Read live GPU metrics and know what healthy looks like](#section-2-seeing-your-gpu-live-nvidia-smi-and-nvitop)
+2. [Read GPU metrics and know what healthy looks like](#section-2-seeing-your-gpu-live-nvidia-smi-and-nvitop)
 3. [Choose the right profiling tool for your question](#section-3-the-profiling-toolchain)
 4. [Diagnose and fix the most common bottleneck: data starvation](#section-4-the-1-bottleneck-data-starvation)
 5. [Understand GPU memory vs utilization and tune both](#section-5-memory-vs-utilization-two-different-problems)
@@ -33,7 +33,7 @@ By the end of this training you will be able to:
 
 All materials are available at [GPU Profiling Training GitHub Repo](https://github.com/northeastern-rc-training/gpu-profiling-2026).
 
-You are welcome to follow along. You can also just watch and try it later at your own pace. Recordings will be posted on the [Research Computing website](https://rc.northeastern.edu/research-computing-spring-training/).
+You are welcome to follow along. You can also just watch and try it later at your own pace. Recordings will be posted on the [Research Computing website](https://rc.northeastern.edu/research-computing-summer-training/).
 
 ---
 
@@ -43,9 +43,7 @@ You submitted a GPU job. It ran. It finished.
 
 But **was the GPU actually working?**
 
-Most GPU jobs on HPC clusters run at 20–40% of what the hardware can do. That means for every hour of compute time charged to your allocation, 30–40 minutes are being wasted — the GPU is sitting idle, waiting.
-
-The good news: almost all of these inefficiencies have the same small set of causes, and once you learn to **measure** your job rather than guess at it, fixes are usually small changes that take minutes to apply.
+Many GPU jobs on HPC clusters run at a fraction of what the hardware can actually do. That means a lot of time being wasted — the GPU is sitting idle, waiting, and the researcher's time getting wasted too. The good news: almost all of these inefficiencies have the same small set of causes, and once you learn to **measure** your job rather than guess at it, fixes are usually small changes that take minutes to apply.
 
 > **The one thing to remember from this whole session:**
 > **Measure before you change anything. Profile first, optimize second.**
