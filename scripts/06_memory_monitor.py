@@ -44,6 +44,10 @@ Utilisation sampling needs NVML bindings (usually preinstalled with the driver):
 Without it, the script still runs and reports memory + throughput.
 """
 
+# Postpone annotation evaluation so modern syntax like `float | None` works on
+# the cluster's system Python (which predates 3.10).
+from __future__ import annotations
+
 import argparse
 import threading
 import time

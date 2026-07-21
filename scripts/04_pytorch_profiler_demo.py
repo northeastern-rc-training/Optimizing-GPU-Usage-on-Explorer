@@ -88,6 +88,19 @@ if DEVICE == "cuda":
 
 os.makedirs("prof_output", exist_ok=True)
 
+# ── Warm up CUDA BEFORE profiling ─────────────────────────────────────────────
+# The first CUDA calls trigger one-time kernel/module loading (you'd see it as a
+# huge "Runtime Triggered Module Loading" row that dwarfs the real compute).  A
+# few untimed steps burn that cost off so the tables below reflect the model's
+# actual work, not startup overhead.
+if DEVICE == "cuda":
+    print("Warming up CUDA (loading kernels) ...")
+    for _ in range(3):
+        wx = torch.randn(BATCH_SIZE, 3, 32, 32, device=DEVICE)
+        model(wx).sum().backward()
+    optimizer.zero_grad(set_to_none=True)
+    torch.cuda.synchronize()
+
 # Schedule: skip 1 step (wait), warm up for 1 step, then profile PROFILE_STEPS
 schedule = torch.profiler.schedule(wait=1, warmup=1, active=PROFILE_STEPS)
 
@@ -148,6 +161,11 @@ print("  3. CPU total >> CUDA total → computation not offloaded to the GPU.")
 print("     Check that tensors are on the right device (.to(DEVICE)).")
 print("  4. DataLoader-related functions at the top of the CPU table →")
 print("     data pipeline bottleneck — tune num_workers and pin_memory.")
+print()
+print("  NOTE: this is a teaching demo, not a before/after benchmark.  It runs a")
+print("  tiny CNN on synthetic in-memory data, so it has NO bottleneck to fix —")
+print("  the point is to learn what the tables look like and how to read them.")
+print("  On a real job, the top rows will point you at the actual problem.")
 print()
 print(f"  TensorBoard trace saved → ./prof_output/")
 print("  To view the interactive timeline:")

@@ -19,6 +19,10 @@ Usage:
     python 05_mixed_precision_demo.py    (GPU recommended for the speed numbers)
 """
 
+# Postpone annotation evaluation so modern syntax like `torch.dtype | None`
+# works on the cluster's system Python (which predates 3.10).
+from __future__ import annotations
+
 import time
 import torch
 import torch.nn as nn
