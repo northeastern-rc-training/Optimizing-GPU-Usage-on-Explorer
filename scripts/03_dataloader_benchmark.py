@@ -11,7 +11,7 @@ the GPU's time would be spent waiting under each one.
 
 Explorer storage note:
   All filesystems (/home, /scratch, /projects) are network filesystems (NFS).
-  Keep your dataset under /scratch/$USER, pack it into a few large files
+  Keep your dataset under /projects/foo or /scratch/$USER, pack it into a few large files
   (HDF5 / WebDataset) rather than millions of tiny ones, and rely on the
   DataLoader (num_workers / pin_memory / prefetch_factor) to hide read latency.
 
@@ -129,7 +129,7 @@ print("  All filesystems here — /home, /scratch, /projects — are network")
 print("  filesystems (NFS).  There is no faster local tier to copy into, so")
 print("  how you structure the data and the DataLoader is what matters.")
 print()
-print("  /scratch/$USER")
+print("  /projects/foo or /scratch/$USER")
 print("    Keep your dataset here.  Pack it into a few large files (HDF5 or")
 print("    WebDataset) rather than millions of tiny ones — per-file metadata")
 print("    overhead over NFS is what kills small-file read throughput.")
