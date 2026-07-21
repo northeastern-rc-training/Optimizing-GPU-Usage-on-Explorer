@@ -71,8 +71,8 @@ pip install --quiet --upgrade pip
 #   pip install torch torchvision torchaudio
 # For CPU-only testing (local machine / login node), use:
 #   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-echo "[3/4] Installing PyTorch (CUDA-enabled wheels) ..."
-pip install --quiet torch torchvision torchaudio
+echo "[3/4] Installing PyTorch (CUDA-enabled wheels. This might take a while) ..."
+pip install torch torchvision torchaudio
 
 # ── Install profiling / monitoring tools ──────────────────────────────────────
 # nvitop        : live GPU dashboard (Section 2)

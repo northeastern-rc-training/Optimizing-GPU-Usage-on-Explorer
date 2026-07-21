@@ -6,7 +6,7 @@
 #      sbatch v100_single_gpu.slurm
 #
 #  Before submitting, run this job in an interactive session first:
-#      srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=8 --mem=32G \
+#      srun --partition=gpu-short --gres=gpu:v100-sxm2:1 --cpus-per-task=8 --mem=32G \
 #           --time=01:00:00 --pty bash
 #  Confirm GPU utilisation > 70% with:  watch -n 1 nvidia-smi
 # ─────────────────────────────────────────────────────────────────────────────
@@ -16,7 +16,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8                 # ← CHANGE: set to num_workers + 1
-#SBATCH --gres=gpu:v100:1                 # request 1 × V100 specifically
+#SBATCH --gres=gpu:v100-sxm2:1                 # request 1 × V100 specifically
 #SBATCH --mem=32G                         # CPU RAM (NOT GPU VRAM)
 #SBATCH --time=04:00:00                   # ← CHANGE: expected runtime + 20%
 #SBATCH --output=logs/%x_%j.out
@@ -26,10 +26,8 @@
 mkdir -p logs
 
 # ── Environment ───────────────────────────────────────────────────────────────
-# No CUDA module needed — PyTorch's CUDA runtime ships in the wheels installed
-# by setup_env.sh.  Just load Python and activate the venv.
-module purge
-module load python/3.11
+# No modules needed — this cluster has no python module, and PyTorch's CUDA
+# runtime ships in the wheels installed by setup_env.sh.  Just activate the venv.
 source /scratch/$USER/Optimizing-GPU-Usage-on-Explorer/gpu_training_env/bin/activate  # ← CHANGE
 
 echo "========================================"
