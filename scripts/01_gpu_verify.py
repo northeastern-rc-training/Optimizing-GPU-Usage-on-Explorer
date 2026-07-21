@@ -4,20 +4,20 @@ Script 01 — GPU Verification on Explorer
 Run this at the TOP of every GPU job to confirm you received the hardware you
 requested and that CUDA is reachable.  Takes under 5 seconds.
 
-On Explorer you will typically see an NVIDIA A100 (80 GB) or a V100 (32 GB),
-depending on the partition and node you land on.  The output tells you which
-you got, how much VRAM is available, and whether SLURM isolated the GPU
-correctly.
+On Explorer you will typically see an NVIDIA V100 (32 GB) or an A100 (80 GB),
+depending on the partition and node you land on.  These demos request a V100.
+The output tells you which you got, how much VRAM is available, and whether
+SLURM isolated the GPU correctly.
 
 Usage (interactive session):
-    srun --partition=gpu-short --gres=gpu:1 --cpus-per-task=4 --mem=16G \
+    srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=4 --mem=16G \
          --time=00:30:00 --pty bash
-    module load cuda/12.2 python/3.11
-    source profiling_env/bin/activate
+    module load python/3.11
+    source gpu_training_env/bin/activate
     python scripts/01_gpu_verify.py
 
-Expected output on an A100 node:
-    GPU 0: NVIDIA A100-SXM4-80GB   80.0 GB   SMs: 108
+Expected output on a V100 node:
+    GPU 0: Tesla V100-SXM2-32GB   32.0 GB   SMs: 80
 """
 
 import os
@@ -29,8 +29,8 @@ try:
 except ImportError:
     print("PyTorch is not installed in this environment.")
     print("Activate the training environment first:")
-    print("  module load cuda/12.2 python/3.11")
-    print("  source profiling_env/bin/activate")
+    print("  module load python/3.11")
+    print("  source gpu_training_env/bin/activate")
     sys.exit(1)
 
 SEP = "=" * 58
@@ -47,10 +47,10 @@ print(f"    PyTorch version  : {torch.__version__}")
 if not cuda_ok:
     print("\n  CUDA is NOT available.  Most likely causes:")
     print("  (a) You are on a login node — request a compute node:")
-    print("      srun --partition=gpu-short --gres=gpu:1 --cpus-per-task=4 \\")
+    print("      srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=4 \\")
     print("           --mem=16G --time=01:00:00 --pty bash")
-    print("  (b) The CUDA module was not loaded:")
-    print("      module load cuda/12.2")
+    print("  (b) The training environment is not activated:")
+    print("      source gpu_training_env/bin/activate")
     print("  (c) Your --gres directive in the SLURM script has a typo.")
     print()
     print("  Nothing below this line is meaningful without a GPU.")
@@ -101,7 +101,7 @@ try:
     else:
         print("    nvidia-smi returned a non-zero exit code.")
 except FileNotFoundError:
-    print("    nvidia-smi not found — load the CUDA module first.")
+    print("    nvidia-smi not found — are you on a GPU node?")
 
 # ── 5. Tensor round-trip test ─────────────────────────────────────────────────
 print("\n[5] Tensor round-trip (CPU → GPU → CPU):")

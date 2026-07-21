@@ -29,6 +29,14 @@ BATCH_SIZE = 128
 INPUT_DIM  = 1024
 STEPS      = 40
 
+# Pick the mixed-precision format the actual hardware supports:
+#   BF16 on A100/H100 (and CPU autocast), FP16 on V100/T4 (no BF16 hardware).
+if DEVICE == "cuda" and not torch.cuda.is_bf16_supported():
+    AMP_DTYPE = torch.float16
+else:
+    AMP_DTYPE = torch.bfloat16
+AMP_NAME = "BF16" if AMP_DTYPE == torch.bfloat16 else "FP16"
+
 SEP = "=" * 62
 
 print(SEP)
@@ -49,9 +57,8 @@ if DEVICE == "cpu":
     print("  On an A100 or H100 the BF16 speedup is typically 1.5–3×.")
     print()
 elif not torch.cuda.is_bf16_supported():
-    print("  NOTE: This GPU has no BF16 hardware (e.g. V100/T4).  BF16 autocast")
-    print("  will run but without Tensor Core acceleration — on those nodes use")
-    print("  FP16 with a GradScaler instead.")
+    print("  NOTE: This GPU has no BF16 hardware (e.g. V100/T4), so this demo")
+    print("  uses FP16 with a GradScaler instead — the right choice on V100.")
     print()
 
 
@@ -124,26 +131,26 @@ if fp32_mem is not None:
     print(f"    Peak VRAM     : {fp32_mem:.0f} MB")
 print()
 
-print("[2] Running BF16 autocast training ...")
-bf16_t, bf16_mem, bf16_tput = run_training(True, torch.bfloat16, "BF16")
-print(f"    Wall time     : {bf16_t:.2f} s")
-print(f"    Throughput    : {bf16_tput:,.0f} samples / s")
-if bf16_mem is not None:
-    print(f"    Peak VRAM     : {bf16_mem:.0f} MB")
+print(f"[2] Running {AMP_NAME} autocast training ...")
+amp_t, amp_mem, amp_tput = run_training(True, AMP_DTYPE, AMP_NAME)
+print(f"    Wall time     : {amp_t:.2f} s")
+print(f"    Throughput    : {amp_tput:,.0f} samples / s")
+if amp_mem is not None:
+    print(f"    Peak VRAM     : {amp_mem:.0f} MB")
 print()
 
 # ── Summary ───────────────────────────────────────────────────────────────────
-speedup = fp32_t / bf16_t if bf16_t > 0 else float("inf")
+speedup = fp32_t / amp_t if amp_t > 0 else float("inf")
 
 print(SEP)
 print("  SUMMARY")
 print(SEP)
-print(f"  Speedup  BF16 vs FP32   : {speedup:.2f}×")
-if fp32_mem is not None and bf16_mem is not None:
-    reduction_pct = (1.0 - bf16_mem / fp32_mem) * 100
-    print(f"  VRAM reduction (BF16)   : {reduction_pct:.0f}%")
+print(f"  Speedup  {AMP_NAME} vs FP32   : {speedup:.2f}×")
+if fp32_mem is not None and amp_mem is not None:
+    reduction_pct = (1.0 - amp_mem / fp32_mem) * 100
+    print(f"  VRAM reduction ({AMP_NAME})   : {reduction_pct:.0f}%")
     print(f"  FP32 peak VRAM          : {fp32_mem:.0f} MB")
-    print(f"  BF16 peak VRAM          : {bf16_mem:.0f} MB")
+    print(f"  {AMP_NAME} peak VRAM          : {amp_mem:.0f} MB")
 
 print()
 print("  CODE CHANGE — just one context manager:")

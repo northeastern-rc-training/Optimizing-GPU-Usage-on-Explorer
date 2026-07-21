@@ -1,5 +1,5 @@
 prof_output/
-profiling_env/
+gpu_training_env/
 profiling_content.md
 training_gpu.md
 logs/

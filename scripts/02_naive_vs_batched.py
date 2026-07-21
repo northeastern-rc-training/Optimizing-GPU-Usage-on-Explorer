@@ -1,7 +1,7 @@
 """
 Script 02 — Naive (one-by-one) vs Batched GPU Processing
 ----------------------------------------------------------
-GPUs are built for massive parallelism.  The NVIDIA A100 on Explorer contains
+GPUs are built for massive parallelism.  The NVIDIA V100 on Explorer contains
 thousands of CUDA cores that sit idle when you send work one item at a time.
 
 This script measures the same total computation done two ways:
@@ -12,9 +12,9 @@ The ratio between the two reveals how much of the GPU's capacity was wasted
 in the naive approach.
 
 Explorer note: the faster the GPU, the larger the relative penalty of
-one-by-one processing.  Each kernel launch has a fixed overhead, and on a fast
-A100 that fixed cost is a bigger fraction of total time — so batching matters
-even more than it did on older hardware.
+one-by-one processing.  Each kernel launch has a fixed overhead, and on a
+data-center GPU like the V100 that fixed cost is a big fraction of total time
+when call sizes are tiny — so batching is essential.
 
 Usage:
     python 02_naive_vs_batched.py
@@ -109,8 +109,8 @@ print("  work you send: kernel launch latency, synchronisation, and PCIe")
 print("  transfer setup.  In the naive loop you pay that overhead 10,000")
 print("  times.  In the batched call you pay it once.")
 print()
-print("  ON EXPLORER (A100):")
-print("  The A100 computes each batch very fast.  That means the fixed")
+print("  ON EXPLORER (V100):")
+print("  The V100 computes each batch quickly.  That means the fixed")
 print("  kernel-launch overhead is a LARGER fraction of total time if you use")
 print("  tiny call sizes — making batching even more critical.")
 print()

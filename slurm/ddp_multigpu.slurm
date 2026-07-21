@@ -17,7 +17,7 @@
 #SBATCH --partition=multigpu              # 24 h; requires separate access request
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4               # one task per GPU
-#SBATCH --gres=gpu:a100:4                 # ← CHANGE: number of GPUs
+#SBATCH --gres=gpu:v100:4                 # ← CHANGE: number of GPUs
 #SBATCH --cpus-per-task=8                 # CPU workers per GPU process
 #SBATCH --mem=128G                        # CPU RAM (NOT GPU VRAM)
 #SBATCH --time=12:00:00                   # ← CHANGE: expected runtime + 20%
@@ -27,9 +27,10 @@
 mkdir -p logs
 
 # ── Environment ───────────────────────────────────────────────────────────────
+# No CUDA module needed — PyTorch's CUDA runtime ships in the wheels.
 module purge
-module load cuda/12.2 python/3.11
-source /scratch/$USER/Optimizing-GPU-Usage-on-Explorer/profiling_env/bin/activate  # ← CHANGE
+module load python/3.11
+source /scratch/$USER/Optimizing-GPU-Usage-on-Explorer/gpu_training_env/bin/activate  # ← CHANGE
 
 echo "========================================"
 echo "Job ID        : $SLURM_JOB_ID"
@@ -57,7 +58,7 @@ torchrun --standalone --nproc_per_node=4 train_ddp.py \   # ← CHANGE: your scr
     --data-dir $DATA_DIR \
     --epochs 50 \
     --batch-size 256 \
-    --bf16
+    --fp16                                # FP16 on V100 (use --bf16 on A100/H100)
 
 echo "========================================"
 echo "End time : $(date)"

@@ -1,7 +1,7 @@
 """
 Script 03 — DataLoader Configuration Benchmark
 ------------------------------------------------
-The NVIDIA A100 on Explorer can finish a training batch in a few milliseconds.
+The NVIDIA V100 on Explorer can finish a training batch in a few milliseconds.
 If your data pipeline takes longer than that to deliver the next batch, the
 GPU stalls — it holds its VRAM allocation (and your queue time) while doing
 absolutely nothing.
@@ -34,9 +34,9 @@ BATCH_SIZE  = 64
 N_BATCHES   = 60
 
 # Simulated GPU compute time per batch (milliseconds).
-# On an A100, a typical ResNet-50 forward+backward on a 64-image batch
-# completes in roughly 10–20 ms at BF16.  Adjust this to match your workload.
-SIMULATED_GPU_MS = 15.0
+# On a V100, a typical ResNet-50 forward+backward on a 64-image batch
+# completes in roughly 25–40 ms at FP16.  Adjust this to match your workload.
+SIMULATED_GPU_MS = 25.0
 
 SEP = "=" * 62
 
@@ -45,7 +45,7 @@ print("  DATALOADER CONFIGURATION BENCHMARK — EXPLORER")
 print(SEP)
 print(f"  Dataset     : {N_SAMPLES:,} synthetic images {IMAGE_SHAPE}")
 print(f"  Batches     : {N_BATCHES} × batch_size={BATCH_SIZE}")
-print(f"  Simulated GPU compute/batch : {SIMULATED_GPU_MS:.0f} ms  (A100 BF16 estimate)")
+print(f"  Simulated GPU compute/batch : {SIMULATED_GPU_MS:.0f} ms  (V100 FP16 estimate)")
 print()
 
 images  = torch.randn(N_SAMPLES, *IMAGE_SHAPE)

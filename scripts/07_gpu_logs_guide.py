@@ -32,27 +32,27 @@ SIMULATED_JOB = {
     "CPUs per task"      : 8,
     "Requested walltime" : "08:00:00",
     "Actual walltime"    : "06:12:33",
-    "GPU"                : "NVIDIA A100-SXM4-80GB",
-    "GPU memory total"   : 80.0,   # GB
+    "GPU"                : "Tesla V100-SXM2-32GB",
+    "GPU memory total"   : 32.0,   # GB
 }
 
 # Illustrative time-series: (minutes into job, GPU util %, VRAM used GB).
 # This pattern — utilisation bouncing between low values — is the classic
 # data-starvation signature: the GPU works in short bursts, then waits.
 SERIES = [
-    (0,   5, 2.1),
-    (30, 22, 7.4),
-    (60, 18, 7.5),
-    (90, 41, 7.5),
-    (120, 16, 7.6),
-    (150, 24, 7.5),
-    (180, 19, 7.6),
-    (210, 45, 7.5),
-    (240, 21, 7.6),
-    (270, 17, 7.5),
-    (300, 23, 7.6),
-    (330, 20, 7.5),
-    (360, 26, 7.6),
+    (0,   5, 1.0),
+    (30, 22, 3.0),
+    (60, 18, 3.1),
+    (90, 41, 3.1),
+    (120, 16, 3.2),
+    (150, 24, 3.1),
+    (180, 19, 3.2),
+    (210, 45, 3.1),
+    (240, 21, 3.2),
+    (270, 17, 3.1),
+    (300, 23, 3.2),
+    (330, 20, 3.1),
+    (360, 26, 3.2),
 ]
 
 SPARK = "▁▂▃▄▅▆▇█"
@@ -163,8 +163,9 @@ print("""
 
   If low (< 40%) — as in the report above (~9%):
     • Increase batch size.  More VRAM usage almost always raises utilisation.
-    • Enable BF16 (A100/H100): it frees memory so you can push batch size
-      higher, which often improves utilisation even as memory % drops.
+    • Enable mixed precision (BF16 on A100/H100, FP16 on V100): it frees
+      memory so you can push batch size higher, which often improves
+      utilisation even as memory % drops.
 
   READING THE SHAPE OF THE CURVE
   ───────────────────────────────
@@ -184,7 +185,7 @@ print("  1. IMMEDIATE: The bouncing-low curve is textbook data starvation.")
 print("     Confirm the DataLoader uses num_workers > 0 and pin_memory=True.")
 print("     Script 03 benchmarks your configuration.")
 print()
-print("  2. VRAM is only ~9% used — increase batch size substantially.")
+print(f"  2. VRAM is only ~{vram_pct:.0f}% used — increase batch size substantially.")
 print("     Script 06 shows the util gain from a right-sized workload.")
 print()
 print("  3. Move the dataset off /home to /scratch, and copy to $TMPDIR at")

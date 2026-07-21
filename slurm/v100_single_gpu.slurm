@@ -1,12 +1,12 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
-#  Explorer — Single A100 GPU Training Job (template)
+#  Explorer — Single V100 GPU Training Job (template)
 #
 #  Copy this file, adjust the values marked with ← CHANGE, and submit with:
-#      sbatch a100_single_gpu.slurm
+#      sbatch v100_single_gpu.slurm
 #
 #  Before submitting, run this job in an interactive session first:
-#      srun --partition=gpu-short --gres=gpu:1 --cpus-per-task=8 --mem=32G \
+#      srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=8 --mem=32G \
 #           --time=01:00:00 --pty bash
 #  Confirm GPU utilisation > 70% with:  watch -n 1 nvidia-smi
 # ─────────────────────────────────────────────────────────────────────────────
@@ -16,7 +16,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8                 # ← CHANGE: set to num_workers + 1
-#SBATCH --gres=gpu:a100:1                 # request 1 × A100 specifically
+#SBATCH --gres=gpu:v100:1                 # request 1 × V100 specifically
 #SBATCH --mem=32G                         # CPU RAM (NOT GPU VRAM)
 #SBATCH --time=04:00:00                   # ← CHANGE: expected runtime + 20%
 #SBATCH --output=logs/%x_%j.out
@@ -26,9 +26,11 @@
 mkdir -p logs
 
 # ── Environment ───────────────────────────────────────────────────────────────
+# No CUDA module needed — PyTorch's CUDA runtime ships in the wheels installed
+# by setup_env.sh.  Just load Python and activate the venv.
 module purge
-module load cuda/12.2 python/3.11
-source /scratch/$USER/Optimizing-GPU-Usage-on-Explorer/profiling_env/bin/activate  # ← CHANGE
+module load python/3.11
+source /scratch/$USER/Optimizing-GPU-Usage-on-Explorer/gpu_training_env/bin/activate  # ← CHANGE
 
 echo "========================================"
 echo "Job ID        : $SLURM_JOB_ID"
@@ -58,7 +60,7 @@ python train.py \                                     # ← CHANGE: your script
     --data-dir $DATA_DIR \
     --epochs 50 \
     --batch-size 256 \
-    --bf16                                # BF16 on A100 (use --fp16 on V100)
+    --fp16                                # FP16 on V100 (use --bf16 on A100/H100)
 
 echo "========================================"
 echo "End time : $(date)"

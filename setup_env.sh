@@ -8,11 +8,11 @@
 #
 #  Steps:
 #    1. Get an interactive GPU node:
-#         srun --partition=gpu-short --gres=gpu:1 --cpus-per-task=4 --mem=16G \
+#         srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=4 --mem=16G \
 #              --time=01:00:00 --pty bash
 #
-#    2. Load the required modules:
-#         module load cuda/12.2 python/3.11
+#    2. Load Python (PyTorch's CUDA runtime ships in the wheels — no CUDA module):
+#         module load python/3.11
 #
 #    3. Run this script from your scratch directory:
 #         cd /scratch/$USER
@@ -24,9 +24,9 @@
 #    4. Activate the environment:
 #         source gpu_training_env/bin/activate
 #
-#  Tip: add the module loads to your ~/.bashrc so they load automatically in
+#  Tip: add the module load to your ~/.bashrc so it loads automatically in
 #  future sessions (optional):
-#    module load cuda/12.2 python/3.11
+#    module load python/3.11
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -48,15 +48,11 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-if ! command -v nvcc &>/dev/null; then
-    echo ""
-    echo "WARNING: nvcc not found.  PyTorch will still install, but if you are"
-    echo "on a GPU node CUDA may not be visible.  Load the module:"
-    echo "  module load cuda/12.2"
-fi
-
 echo "python3 : $(python3 --version)"
-echo "nvcc    : $(nvcc --version 2>/dev/null | grep -o 'release [0-9.]*' || echo 'not loaded')"
+echo ""
+echo "Note: PyTorch's CUDA runtime is bundled with the pip wheels installed below,"
+echo "so no CUDA module is required.  You only need a GPU node (the NVIDIA driver"
+echo "is always present there) to actually use the GPU."
 echo ""
 
 # ── Create venv (skip if it already exists) ───────────────────────────────────

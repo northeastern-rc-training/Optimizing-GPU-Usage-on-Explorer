@@ -10,26 +10,26 @@ training run, both VRAM usage AND GPU utilisation evolve:
   5. Backward pass: peak usage
   6. After optimizer.step() and zero_grad(): partial release
 
-The trap on Explorer: an A100 (80 GB, high SM count) is so powerful that a
-small model / small batch / FP32 workload leaves it mostly idle.  Kernel-launch
-and Python overhead dominate, and BOTH memory and utilisation stay low —
-often < 40% util even though "the code runs fine".
+The trap on Explorer: even a V100 (32 GB) is fast enough that a small model /
+small batch / FP32 workload leaves it mostly idle.  Kernel-launch and Python
+overhead dominate, and BOTH memory and utilisation stay low — often < 40% util
+even though "the code runs fine".
 
 This script demonstrates the fix directly.  It runs the SAME model twice:
 
   1. BASELINE  — an undersized config (small batch, tiny images, FP32)
                  → the < 40% utilisation you are seeing.
   2. TUNED     — a GPU-appropriate config (large batch, larger images,
-                 wider model, BF16 Tensor Cores, channels_last, GPU-resident
-                 data) → high, healthy utilisation.
+                 wider model, 16-bit autocast (BF16/FP16), channels_last,
+                 GPU-resident data) → high, healthy utilisation.
 
 For each phase it measures peak VRAM, mean/max GPU utilisation (sampled live
 from NVML), and throughput, then prints exactly WHAT changed and WHY
 utilisation went up.
 
 Explorer hardware context:
-  A100  — 80 GB VRAM  (large; supports BF16 Tensor Cores)
-  V100  — 32 GB VRAM  (no BF16 hardware; the script falls back to FP16)
+  V100  — 32 GB VRAM  (demo default; no BF16 hardware, so the script uses FP16)
+  A100  — 80 GB VRAM  (larger; supports BF16 Tensor Cores)
 
 Having lots of VRAM does NOT mean you should leave it mostly empty.
 Low memory usage + low utilisation = wasted hardware.
@@ -345,10 +345,10 @@ def main() -> None:
         print(f"  → GPU utilisation rose from {base['util_mean']:.0f}% "
               f"to {tuned['util_mean']:.0f}%.")
     print()
-    print("  Takeaway: on an A100, < 40% utilisation usually means the workload")
-    print("  is too small for the hardware, NOT that the GPU is slow.  Scale")
-    print("  batch, resolution, and model width, and use BF16 — then re-check")
-    print("  nvidia-smi.")
+    print("  Takeaway: on a fast GPU like the V100, < 40% utilisation usually")
+    print("  means the workload is too small for the hardware, NOT that the GPU")
+    print("  is slow.  Scale batch, resolution, and model width, and enable")
+    print("  mixed precision — then re-check nvidia-smi.")
     print(SEP)
 
 

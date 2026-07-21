@@ -67,7 +67,7 @@ Let's get the training materials ready before we start the demos.
 2. Request an interactive GPU session for the live demos:
    ```bash
    srun --partition=gpu-short \
-        --gres=gpu:1 \
+        --gres=gpu:v100:1 \
         --cpus-per-task=4 \
         --mem=16G \
         --time=01:00:00 \
@@ -81,10 +81,10 @@ Let's get the training materials ready before we start the demos.
    ```
 5. Set up the Python environment:
    ```bash
-   chmod +x setup_profiling_env.sh
-   ./setup_profiling_env.sh
-   source profiling_env/bin/activate
-   which python   # should point to profiling_env
+   chmod +x setup_env.sh
+   ./setup_env.sh
+   source gpu_training_env/bin/activate
+   which python   # should point to gpu_training_env
    ```
 
 > 💡 **Question for Audience:** Why are we using `srun` here instead of `sbatch`?
@@ -102,9 +102,9 @@ The answer: `srun` gives us a live terminal on a compute node. We can run comman
 Before any optimization work can happen, you need to be sure your job is actually running on the hardware you requested. This sounds obvious — but it is a surprisingly common source of wasted time.
 
 Here is what can go wrong:
-- You request 1 GPU but land on a node where that GPU is in use
-- You request an A100 but get a V100 (different memory, different capability)
-- CUDA is not available because the module was not loaded
+
+- You request one GPU type but land on another (different memory, different capability)
+- CUDA is not available because you are not on a GPU node, or the environment is not activated
 - Your code runs on CPU silently, never raising an error
 
 ### 1.1 How SLURM Gives You a GPU
@@ -118,7 +118,7 @@ The two key directives in any GPU SLURM script are `--gres` and `--partition`.
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8           # CPU cores for data loading workers
-#SBATCH --gres=gpu:a100:1           # request 1 × A100 specifically
+#SBATCH --gres=gpu:v100:1           # request 1 × V100 specifically
 #SBATCH --mem=32G                   # this is CPU RAM, not GPU VRAM
 #SBATCH --time=04:00:00
 #SBATCH --output=logs/%x_%j.out     # %x = job name, %j = job id
@@ -126,19 +126,19 @@ The two key directives in any GPU SLURM script are `--gres` and `--partition`.
 
 mkdir -p logs                       # create the log dir before SLURM writes to it
 
-module load cuda/12.2 python/3.11
+module load python/3.11
 python train.py
 ```
 
 A few points worth pausing on:
 
-- `--gres=gpu:a100:1` is more specific than `--gres=gpu:1`. The second form may land you on a V100 when you actually need A100 memory capacity. Be explicit.
+- `--gres=gpu:v100:1` is more specific than `--gres=gpu:1`. The second form may land you on a different GPU type than you expect. Be explicit about the type you want.
 - `--mem=32G` is **CPU RAM**, not GPU memory. GPU VRAM is allocated automatically when you get the GPU.
 - `--cpus-per-task=8` matters more than most people think. We will see exactly why in Section 4.
-- The `module load cuda/12.2` line is required. Without it, PyTorch cannot find the GPU driver and `torch.cuda.is_available()` returns `False`.
+- **No CUDA module is needed.** The PyTorch wheels installed by `setup_env.sh` bundle their own CUDA runtime. As long as you are on a GPU node (the NVIDIA driver is always present) with the environment activated, `torch.cuda.is_available()` returns `True`.
 - Create the `logs/` directory before submitting (or `mkdir -p logs` inside the script), or SLURM may fail to write its output files.
 
-> 💡 **Tip:** Runnable SLURM templates live in `slurm/` — `a100_single_gpu.slurm` for single-GPU training and `ddp_multigpu.slurm` for multi-GPU DDP. Copy one and edit the values marked `← CHANGE`.
+> 💡 **Tip:** Runnable SLURM templates live in `slurm/` — `v100_single_gpu.slurm` for single-GPU training and `ddp_multigpu.slurm` for multi-GPU DDP. Copy one and edit the values marked `← CHANGE`.
 
 ### 1.2 GPU Partitions on Explorer
 
@@ -180,7 +180,7 @@ What the script checks:
 
 > 💡 **Question for Audience:** If `torch.cuda.is_available()` returns `False` on a compute node, what is the most likely cause?
 
-**Answer:** The `cuda` module was not loaded. `module load cuda/12.2` must appear in your job script (or interactive session) before Python runs.
+**Answer:** Most often the training environment is not activated (so Python is falling back to a CPU-only PyTorch), or you are not actually on a GPU node. Activate the venv with `source gpu_training_env/bin/activate` and re-run `scripts/01_gpu_verify.py`. No CUDA module is required — the PyTorch wheels bundle their own CUDA runtime.
 
 ### 1.4 The CUDA_VISIBLE_DEVICES Variable
 
@@ -307,11 +307,12 @@ The better workflow: get an `srun` interactive session, do all your profiling an
 
 ```bash
 # Get an interactive GPU session
-srun --partition=gpu-short --gres=gpu:1 --cpus-per-task=8 --mem=32G \
+srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=8 --mem=32G \
      --time=01:00:00 --pty bash
 
-# In the session: load modules, run your script for 50 steps, profile it
-module load cuda/12.2 python/3.11
+# In the session: load Python, activate the venv, run your script for 50 steps
+module load python/3.11
+source gpu_training_env/bin/activate
 python train.py --max-steps 50
 
 # Profile a short window — 20-30 steps is usually enough
@@ -742,7 +743,7 @@ The cost of the all-reduce grows with model size and shrinks with interconnect b
 
 DistributedDataParallel (DDP) is the correct way to do data-parallel training in PyTorch. Do not use the older `DataParallel` — it has GIL contention and is slower.
 
-**First, confirm your code is actually written for DDP.** If you run a plain PyTorch script with `--gres=gpu:4`, SLURM allocates 4 GPUs but your code will only use the first one — `model.cuda()` moves the model to device 0 and the other three sit idle (and drag down your efficiency).
+**First, confirm your code is actually written for DDP.** If you run a plain PyTorch script with `--gres=gpu:v100:4`, SLURM allocates 4 GPUs but your code will only use the first one — `model.cuda()` moves the model to device 0 and the other three sit idle (and drag down your efficiency).
 
 ```python
 # Quick check: does this process participate in a DDP group?
@@ -779,7 +780,7 @@ for epoch in range(epochs):
 # SLURM script for a 4-GPU single-node job
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:v100:4
 #SBATCH --cpus-per-task=8
 
 torchrun --nproc_per_node=4 launch_ddp.py
@@ -883,7 +884,7 @@ Before submitting any GPU batch job, verify these items — ideally in an `srun`
 - [ ] Data is on `$TMPDIR` or node-local storage (not `/home`)
 - [ ] Batch size uses at least 50% of VRAM (not leaving large amounts unused)
 - [ ] Mixed precision enabled if on A100/H100 (just three lines of code)
-- [ ] SLURM script requests the right GPU type (`gpu:a100:1`, not just `gpu:1`)
+- [ ] SLURM script requests the right GPU type (`gpu:v100:1`, not just `gpu:1`)
 - [ ] `--cpus-per-task` is at least 4 (preferably matching `num_workers + 1`)
 - [ ] `logs/` directory exists (or `mkdir -p logs` in the script)
 - [ ] You have profiled for 20–50 steps and read the output
@@ -974,10 +975,10 @@ Review our [Documentation](https://rc-docs.northeastern.edu/en/latest/index.html
 |---|---|
 | Login | `ssh <username>@login.explorer.northeastern.edu` |
 | GPU partitions | `gpu-short` (2 h), `gpu` (8 h), `multigpu` (24 h), `gpu-interactive` (2 h), `sharing` (1 h) |
-| GPU types | NVIDIA A100 (80 GB), V100 (32 GB) |
-| CUDA module | `cuda/12.2` |
+| GPU types | NVIDIA V100 (32 GB), A100 (80 GB) |
+| GPU runtime | Bundled with the PyTorch CUDA wheels — no CUDA module needed |
 | Python module | `python/3.11` |
-| Environment | `venv` (`profiling_env`) |
+| Environment | `venv` (`gpu_training_env`) |
 | Fast local storage | `$TMPDIR` (node-local NVMe); `/scratch` (Lustre) |
 | Post-job efficiency | `gpu-logs <jobid>` |
 | Preferred precision | BF16 on A100/H100; FP16 on V100/T4 |

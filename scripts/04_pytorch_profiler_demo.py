@@ -15,10 +15,10 @@ Explorer workflow note:
   job to the `gpu` or `multigpu` partition with sbatch.
 
 Usage:
-    srun --partition=gpu-short --gres=gpu:1 --cpus-per-task=4 --mem=16G \
+    srun --partition=gpu-short --gres=gpu:v100:1 --cpus-per-task=4 --mem=16G \
          --time=01:00:00 --pty bash
-    module load cuda/12.2 python/3.11
-    source profiling_env/bin/activate
+    module load python/3.11
+    source gpu_training_env/bin/activate
     python scripts/04_pytorch_profiler_demo.py
 
 Works on CPU too (CUDA tables will be absent; useful for testing the script).
