@@ -840,11 +840,6 @@ What to look for:
 - **The shape of the curve.** A flat, high line is healthy. A line that bounces between low values is data starvation. A flat, low line means the workload is too small for the GPU.
 - **Average VRAM** — low usage means you have headroom for a larger batch.
 
-```bash
-# Demo: an illustrated gpu-logs report and how to read each metric
-python scripts/07_gpu_logs_guide.py
-```
-
 **Make reviewing `gpu-logs` a habit:**
 
 > After every batch job → run `gpu-logs <jobid>` → if average GPU utilization < 60%, fix it before submitting the next run.
